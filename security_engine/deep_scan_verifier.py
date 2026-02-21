@@ -29,6 +29,7 @@ Prerequisites:
   - SSH access configured (root key-based login, no password)
 """
 
+import json
 import logging
 from typing import Optional
 
@@ -158,6 +159,38 @@ class DeepScanVerifier(PackageVerifier):
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
+    @staticmethod
+    def _parse_vt_counts(vt_output: str) -> tuple[int, int]:
+        """
+        Extract (malicious_count, suspicious_count) from VirusTotal output.
+
+        check_virustotal.py emits one JSON object per scanned file.
+        We aggregate across all lines, taking the max of each counter
+        (worst-case across files in the package).
+
+        Handles multi-line output (one JSON per line) and falls back to
+        zero counts on any parse error — failing safe rather than crashing.
+        """
+        if not vt_output.strip():
+            return 0, 0
+
+        total_malicious = 0
+        total_suspicious = 0
+
+        for line in vt_output.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                total_malicious += int(data.get("malicious", 0))
+                total_suspicious += int(data.get("suspicious", 0))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                # Non-JSON line (e.g. a log message) — skip it
+                continue
+
+        return total_malicious, total_suspicious
+
     def _build_verdict(
         self,
         package_name: str,
@@ -196,8 +229,13 @@ class DeepScanVerifier(PackageVerifier):
             )
 
         # ── Check VirusTotal results ──────────────────────────────────────────
-        vt_lower = result.virustotal_output.lower()
-        if "malicious" in vt_lower:
+        # Parse the JSON output from check_virustotal.py to read numeric
+        # detection counts rather than doing naive string matching.
+        # Naive "malicious" in output would fire on clean JSON like:
+        #   {"status":"clean","malicious":0} — the key name matches even at 0.
+        vt_malicious, vt_suspicious = self._parse_vt_counts(result.virustotal_output)
+
+        if vt_malicious > 0:
             return VerificationResult(
                 is_safe=False,
                 package_name=package_name,
@@ -205,13 +243,13 @@ class DeepScanVerifier(PackageVerifier):
                 risk_level=RiskLevel.MALICIOUS,
                 reason=(
                     f"Package '{package_name}' was flagged by VirusTotal "
-                    "during sandbox analysis."
+                    f"({vt_malicious} malicious detection(s))."
                 ),
                 confidence=0.85,
                 metadata=metadata,
             )
 
-        if "suspicious" in vt_lower:
+        if vt_suspicious > 0:
             return VerificationResult(
                 is_safe=False,
                 package_name=package_name,
@@ -219,7 +257,7 @@ class DeepScanVerifier(PackageVerifier):
                 risk_level=RiskLevel.SUSPICIOUS,
                 reason=(
                     f"Package '{package_name}' raised suspicion during "
-                    "VirusTotal analysis."
+                    f"VirusTotal analysis ({vt_suspicious} suspicious detection(s))."
                 ),
                 confidence=0.70,
                 metadata=metadata,

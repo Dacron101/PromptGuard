@@ -95,12 +95,12 @@ _PATTERNS: dict[str, re.Pattern] = {
     #   npx --yes npm install <pkg>
     "npm": re.compile(
         r"""
-        (?:sudo\s+)?                # optional sudo
-        (?:npx\s+(?:--yes\s+)?)?   # optional npx invocation
-        npm\s+(?:install|i|add)\s+ # npm install | npm i | npm add
-        (?P<flags>(?:-{1,2}\S+\s+)*)   # optional flags (e.g. --save-dev, -g)
+        (?:sudo[ \t]+)?                # optional sudo
+        (?:npx[ \t]+(?:--yes[ \t]+)?)? # optional npx invocation
+        npm[ \t]+(?:install|i|add)[ \t]+ # npm install | npm i | npm add
+        (?P<flags>(?:-{1,2}\S+[ \t]+)*)   # optional flags (e.g. --save-dev, -g)
         (?P<packages>[a-zA-Z0-9@._/\-]+ # package name (scoped or plain)
-          (?:\s+[a-zA-Z0-9@._/\-]+)*)   # optional additional packages
+          (?:[ \t]+[a-zA-Z0-9@._/\-]+)*)  # optional additional packages (same line only)
         """,
         re.VERBOSE | re.IGNORECASE,
     ),
@@ -112,13 +112,13 @@ _PATTERNS: dict[str, re.Pattern] = {
     #   yarn global add <pkg>
     "yarn": re.compile(
         r"""
-        (?:sudo\s+)?
-        yarn\s+
-        (?:global\s+)?              # optional 'global'
-        add\s+
-        (?P<flags>(?:-{1,2}\S+\s+)*)
+        (?:sudo[ \t]+)?
+        yarn[ \t]+
+        (?:global[ \t]+)?              # optional 'global'
+        add[ \t]+
+        (?P<flags>(?:-{1,2}\S+[ \t]+)*)
         (?P<packages>[a-zA-Z0-9@._/\-]+
-          (?:\s+[a-zA-Z0-9@._/\-]+)*)
+          (?:[ \t]+[a-zA-Z0-9@._/\-]+)*)  # same line only
         """,
         re.VERBOSE | re.IGNORECASE,
     ),
@@ -131,12 +131,12 @@ _PATTERNS: dict[str, re.Pattern] = {
     #   python3 -m pip install --upgrade <pkg>
     "pip": re.compile(
         r"""
-        (?:sudo\s+)?
-        (?:python3?\s+-m\s+)?       # optional python -m prefix
-        pip3?\s+install\s+
-        (?P<flags>(?:-{1,2}\S+\s+)*)
+        (?:sudo[ \t]+)?
+        (?:python3?[ \t]+-m[ \t]+)?       # optional python -m prefix
+        pip3?[ \t]+install[ \t]+
+        (?P<flags>(?:-{1,2}\S+[ \t]+)*)
         (?P<packages>[a-zA-Z0-9._\-]+(?:[=<>!~]{1,2}[^\s]+)?
-          (?:\s+[a-zA-Z0-9._\-]+(?:[=<>!~]{1,2}[^\s]+)?)*)
+          (?:[ \t]+[a-zA-Z0-9._\-]+(?:[=<>!~]{1,2}[^\s]+)?)*)  # same line only
         """,
         re.VERBOSE | re.IGNORECASE,
     ),
@@ -147,11 +147,11 @@ _PATTERNS: dict[str, re.Pattern] = {
     #   brew install --cask <app>
     "brew": re.compile(
         r"""
-        (?:sudo\s+)?
-        brew\s+install\s+
-        (?P<flags>(?:-{1,2}\S+\s+)*)
+        (?:sudo[ \t]+)?
+        brew[ \t]+install[ \t]+
+        (?P<flags>(?:-{1,2}\S+[ \t]+)*)
         (?P<packages>[a-zA-Z0-9._/\-]+
-          (?:\s+[a-zA-Z0-9._/\-]+)*)
+          (?:[ \t]+[a-zA-Z0-9._/\-]+)*)  # same line only
         """,
         re.VERBOSE | re.IGNORECASE,
     ),
