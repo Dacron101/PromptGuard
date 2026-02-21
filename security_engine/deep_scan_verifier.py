@@ -30,7 +30,6 @@ Prerequisites:
 """
 
 import logging
-import os
 from typing import Optional
 
 from .base import PackageVerifier, VerificationResult, RiskLevel
@@ -108,6 +107,7 @@ class DeepScanVerifier(PackageVerifier):
             rootfs_path=self._rootfs_path,
             vm_ip=self._vm_ip,
             ssh_key_path=self._ssh_key_path,
+            virustotal_key=self._virustotal_key,  # injected into VM env for VT scans
             vcpu_count=self._vcpu_count,
             mem_size_mib=self._mem_size_mib,
             ssh_timeout=self._timeout,
