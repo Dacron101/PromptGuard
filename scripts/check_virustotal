@@ -1,0 +1,30 @@
+import requests
+import sys
+import os
+
+def check_virustotal(file_path):
+    url = "https://www.virustotal.com/api/v3/files"
+
+    headers = {
+        "accept": "application/json",
+        "x-apikey": os.getenv("VIRUSTOTAL_API_KEY")
+    }
+
+    with open(file_path, "rb") as f:
+        files = {"file": (file_path, f)}
+        response = requests.post(url, headers=headers, files=files)
+
+    return response.text
+
+def my_function(data):
+    return {"result": data["x"] * 2}
+
+def main():
+
+    # result = check_virustotal(file_path)
+    result = my_function({"x": 5})
+    print(result)
+
+
+if __name__ == "__main__":
+    main()

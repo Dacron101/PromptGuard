@@ -1,98 +1,85 @@
 """
 security_engine/deep_scan_verifier.py
 
-Concrete Strategy (STUB): DeepScanVerifier
-───────────────────────────────────────────
-This module is the designated home for the heavy-weight, multi-signal
-verification pipeline. It is intentionally left unimplemented (stub) for now.
-All methods raise NotImplementedError and the class is excluded from the
-default verifier chain in SecurityChecker.
+Concrete Strategy: DeepScanVerifier
+────────────────────────────────────
+High-fidelity package verification using a Firecracker microVM sandbox.
 
-═══════════════════════════════════════════════════════════════════════════════
-IMPLEMENTATION ROADMAP
-═══════════════════════════════════════════════════════════════════════════════
+When the BasicVerifier returns UNKNOWN (package not in the allowlist but no
+obvious red flags), the SecurityChecker can escalate to this verifier.
+DeepScanVerifier will:
 
-Phase 1 — Static Analysis
-    1a. Download the package tarball/source into a temp directory.
-    1b. Run Semgrep (or ast-grep) with the OWASP ruleset against the source.
-    1c. Compute SHA-256 of every file and cross-reference against a hash DB.
+  1. Spin up an isolated Firecracker microVM.
+  2. Install the package inside the VM using the appropriate package manager.
+  3. Inspect the filesystem for suspicious mutations (writes to ~/.ssh,
+     cron directories, hidden temp files, etc.).
+  4. Run the check_virustotal scanner against newly installed files.
+  5. Aggregate all signals and return a definitive VerificationResult.
+  6. Tear down the VM — no artefacts persist on the host.
 
-Phase 2 — Dynamic Sandbox (Docker)
-    ─────────────────────────────────────────────────────────────
-    FUTURE INJECTION POINT — Docker containerisation
-    ─────────────────────────────────────────────────────────────
-    2a. Pull a locked base image (e.g., python:3.12-slim-bookworm).
-    2b. Create an isolated network namespace (--network none) so the
-        package cannot phone home during installation.
-    2c. Mount the package tarball as a read-only volume.
-    2d. Run `pip/npm install <pkg>` inside the container while capturing
-        all file-system mutations (via `--mount type=tmpfs`) and
-        syscall traces (Falco sidecar or `strace -f`).
-    2e. Compare pre/post filesystem snapshot; flag suspicious writes to
-        ~/.ssh, /etc/cron.d, /tmp, etc.
-    2f. Inspect network connections attempted (should be zero with --network none).
-    2g. Destroy the container and clean up all artefacts.
+The Firecracker VM provides hardware-level isolation via KVM, which is
+stronger than Docker containers (which share the host kernel). Packages
+cannot escape the microVM boundary even with root privileges inside the VM.
 
-Phase 3 — Threat Intelligence
-    ─────────────────────────────────────────────────────────────
-    FUTURE INJECTION POINT — VirusTotal integration
-    ─────────────────────────────────────────────────────────────
-    3a. Submit file hashes from Phase 1c to the VirusTotal Files API.
-    3b. Query the package URL on VirusTotal's URL scanner.
-    3c. Check OSV (https://osv.dev/), Snyk Advisor, and Socket.dev APIs
-        for known CVEs / malware tags.
-    3d. Aggregate results: if ≥ 3 AV engines flag any file → MALICIOUS.
-
-Phase 4 — ML Typosquat Detector
-    4a. Load a pre-trained edit-distance + embedding model.
-    4b. Compute cosine similarity between the candidate package name and
-        all names in the top-1000 packages list for the ecosystem.
-    4c. If similarity to a different package exceeds threshold → SUSPICIOUS.
-
-All of the above is wired together inside `verify()`. The SecurityChecker
-passes packages here only if BasicVerifier returns UNKNOWN or SUSPICIOUS.
+Prerequisites:
+  - Linux host with /dev/kvm access
+  - `firecracker` binary on PATH
+  - A vmlinux kernel image and rootfs.ext4 with package managers + Python 3
+    + check_virustotal.py pre-deployed at /usr/local/bin/
+  - SSH access configured (root key-based login, no password)
 """
 
 import logging
+import os
 from typing import Optional
 
 from .base import PackageVerifier, VerificationResult, RiskLevel
+from .firecracker_sandbox import FirecrackerSandbox, SandboxResult
 
 logger = logging.getLogger(__name__)
 
 
 class DeepScanVerifier(PackageVerifier):
     """
-    High-fidelity verifier that performs static analysis, dynamic sandboxing,
-    and threat-intelligence lookups.
+    Firecracker-backed package verifier.
 
-    This class is a STUB. Instantiating it will succeed, but calling
-    `verify()` will raise NotImplementedError until the roadmap above is
-    implemented.
+    Installs the candidate package inside an isolated microVM, analyses
+    the results, and returns a VerificationResult.
 
     Configuration (all injected via __init__ for testability):
-        docker_image    : Base image used for the sandbox container.
-        virustotal_key  : VirusTotal API v3 key (read from env in production).
+        kernel_path     : Path to the vmlinux kernel image.
+        rootfs_path     : Path to the rootfs.ext4 image.
+        vm_ip           : IP address for SSH into the VM.
+        ssh_key_path    : Path to the SSH private key for root@vm.
+        virustotal_key  : VirusTotal API v3 key (for the in-VM scanner).
         timeout_seconds : Hard wall-clock limit for the entire scan pipeline.
-        network_enabled : Whether the sandbox is allowed outbound network
-                          access (default False — air-gapped is safer).
+        vcpu_count      : Number of virtual CPUs for the VM.
+        mem_size_mib    : Memory allocation in MiB.
     """
 
     def __init__(
         self,
-        docker_image: str = "python:3.12-slim-bookworm",
+        kernel_path: str = "./vmlinux",
+        rootfs_path: str = "./rootfs.ext4",
+        vm_ip: str = "172.16.0.2",
+        ssh_key_path: Optional[str] = None,
         virustotal_key: Optional[str] = None,
         timeout_seconds: int = 120,
-        network_enabled: bool = False,
+        vcpu_count: int = 1,
+        mem_size_mib: int = 256,
     ) -> None:
-        self._docker_image = docker_image
+        self._kernel_path = kernel_path
+        self._rootfs_path = rootfs_path
+        self._vm_ip = vm_ip
+        self._ssh_key_path = ssh_key_path
         self._virustotal_key = virustotal_key
         self._timeout = timeout_seconds
-        self._network_enabled = network_enabled
+        self._vcpu_count = vcpu_count
+        self._mem_size_mib = mem_size_mib
 
-        logger.warning(
-            "DeepScanVerifier is a stub and not yet implemented. "
-            "Package verification will fall back to BasicVerifier."
+        logger.info(
+            "DeepScanVerifier initialised | kernel=%s rootfs=%s vm_ip=%s",
+            kernel_path, rootfs_path, vm_ip,
         )
 
     @property
@@ -101,97 +88,169 @@ class DeepScanVerifier(PackageVerifier):
 
     def verify(self, package_name: str, package_manager: str) -> VerificationResult:
         """
-        Full multi-signal verification pipeline.
+        Full Firecracker-based verification pipeline.
 
-        ── Phase 1: Static analysis ──────────────────────────────────────────
-        TODO: Implement _run_static_analysis(package_name, package_manager)
-
-        ── Phase 2: Docker sandbox ───────────────────────────────────────────
-        TODO: Implement _run_docker_sandbox(package_name, package_manager)
-              See module docstring for full spec.
-
-        ── Phase 3: VirusTotal / OSV lookup ──────────────────────────────────
-        TODO: Implement _query_threat_intel(file_hashes)
-              See module docstring for full spec.
-
-        ── Phase 4: ML typosquat check ───────────────────────────────────────
-        TODO: Implement _check_typosquatting(package_name, package_manager)
+        1. Start an isolated Firecracker microVM.
+        2. Install the package inside the VM.
+        3. Check for suspicious filesystem mutations.
+        4. Run VirusTotal scan on installed files.
+        5. Aggregate signals into a verdict.
+        6. Shut down the VM.
         """
-        raise NotImplementedError(
-            "DeepScanVerifier.verify() is not yet implemented. "
-            "Refer to the roadmap in security_engine/deep_scan_verifier.py."
+        logger.info(
+            "[DeepScanVerifier] Starting sandbox verification: "
+            "pkg=%s manager=%s",
+            package_name, package_manager,
         )
 
-    # ── Private pipeline stages (all stubs) ──────────────────────────────────
+        sandbox = FirecrackerSandbox(
+            kernel_path=self._kernel_path,
+            rootfs_path=self._rootfs_path,
+            vm_ip=self._vm_ip,
+            ssh_key_path=self._ssh_key_path,
+            vcpu_count=self._vcpu_count,
+            mem_size_mib=self._mem_size_mib,
+            ssh_timeout=self._timeout,
+        )
 
-    def _run_static_analysis(self, package_name: str, package_manager: str) -> dict:
-        """
-        Phase 1: Download tarball, run Semgrep, compute file hashes.
-
-        Returns:
-            dict with keys: 'file_hashes', 'semgrep_findings', 'tarball_path'
-        """
-        # ─────────────────────────────────────────────────────────────────────
-        # FUTURE INJECTION POINT — Static analysis pipeline
-        # ─────────────────────────────────────────────────────────────────────
-        raise NotImplementedError
-
-    def _run_docker_sandbox(self, package_name: str, package_manager: str) -> dict:
-        """
-        Phase 2: Install the package inside an isolated Docker container and
-        record all observable side effects.
-
-        Implementation sketch:
-            import docker
-            client = docker.from_env()
-            container = client.containers.run(
-                self._docker_image,
-                command=f"{package_manager} install {package_name}",
-                network_mode="none" if not self._network_enabled else "bridge",
-                remove=True,
-                stdout=True,
-                stderr=True,
-                mem_limit="256m",
-                cpu_period=100_000,
-                cpu_quota=50_000,
+        try:
+            with sandbox:
+                sandbox.start()
+                sandbox_result = sandbox.run_install_test(
+                    package_name, package_manager
+                )
+        except FileNotFoundError:
+            logger.error(
+                "Firecracker binary not found. Is it installed and on PATH?"
+            )
+            return VerificationResult(
+                is_safe=False,
+                package_name=package_name,
+                package_manager=package_manager,
+                risk_level=RiskLevel.UNKNOWN,
+                reason=(
+                    "DeepScanVerifier could not start: 'firecracker' binary "
+                    "not found. Package blocked as a precaution."
+                ),
+                confidence=0.30,
+                metadata={"error": "firecracker_not_found"},
+            )
+        except Exception as exc:
+            logger.error(
+                "Sandbox verification failed with exception: %s", exc,
+                exc_info=True,
+            )
+            return VerificationResult(
+                is_safe=False,
+                package_name=package_name,
+                package_manager=package_manager,
+                risk_level=RiskLevel.UNKNOWN,
+                reason=(
+                    f"DeepScanVerifier encountered an error: {exc}. "
+                    "Package blocked as a precaution."
+                ),
+                confidence=0.30,
+                metadata={"error": str(exc)},
             )
 
-        Returns:
-            dict with keys: 'stdout', 'stderr', 'fs_mutations', 'network_calls'
-        """
-        # ─────────────────────────────────────────────────────────────────────
-        # FUTURE INJECTION POINT — Docker container lifecycle management
-        # ─────────────────────────────────────────────────────────────────────
-        raise NotImplementedError
+        # ── Aggregate signals into a verdict ──────────────────────────────────
+        return self._build_verdict(package_name, package_manager, sandbox_result)
 
-    def _query_threat_intel(self, file_hashes: list[str]) -> dict:
-        """
-        Phase 3: Submit hashes to VirusTotal and query OSV/Snyk.
+    # ── Private helpers ───────────────────────────────────────────────────────
 
-        Implementation sketch:
-            import httpx
-            vt_url = "https://www.virustotal.com/api/v3/files/{hash}"
-            headers = {"x-apikey": self._virustotal_key}
-            for h in file_hashes:
-                resp = httpx.get(vt_url.format(hash=h), headers=headers)
-                # Parse resp.json()["data"]["attributes"]["last_analysis_stats"]
-
-        Returns:
-            dict with keys: 'vt_detections', 'osv_advisories', 'snyk_issues'
+    def _build_verdict(
+        self,
+        package_name: str,
+        package_manager: str,
+        result: SandboxResult,
+    ) -> VerificationResult:
         """
-        # ─────────────────────────────────────────────────────────────────────
-        # FUTURE INJECTION POINT — VirusTotal API v3 integration
-        # ─────────────────────────────────────────────────────────────────────
-        raise NotImplementedError
+        Translate a SandboxResult into a VerificationResult.
 
-    def _check_typosquatting(self, package_name: str, package_manager: str) -> dict:
+        Decision matrix:
+          - Install failed (non-zero exit)          → SUSPICIOUS
+          - Suspicious files written                 → MALICIOUS
+          - VirusTotal flagged files                 → MALICIOUS
+          - Install succeeded, no red flags          → SAFE
         """
-        Phase 4: ML-based edit-distance and embedding similarity check.
+        metadata = {
+            "install_exit_code": result.install_exit_code,
+            "suspicious_files": result.suspicious_files,
+            "virustotal_output": result.virustotal_output[:500],
+            "sandbox_engine": "firecracker",
+        }
 
-        Returns:
-            dict with keys: 'closest_match', 'similarity_score', 'is_typosquat'
-        """
-        # ─────────────────────────────────────────────────────────────────────
-        # FUTURE INJECTION POINT — ML typosquat detection model
-        # ─────────────────────────────────────────────────────────────────────
-        raise NotImplementedError
+        # ── Check for malicious indicators ────────────────────────────────────
+        if result.suspicious_files:
+            return VerificationResult(
+                is_safe=False,
+                package_name=package_name,
+                package_manager=package_manager,
+                risk_level=RiskLevel.MALICIOUS,
+                reason=(
+                    f"Package '{package_name}' wrote to suspicious locations "
+                    f"during installation: {', '.join(result.suspicious_files[:5])}"
+                ),
+                confidence=0.90,
+                metadata=metadata,
+            )
+
+        # ── Check VirusTotal results ──────────────────────────────────────────
+        vt_lower = result.virustotal_output.lower()
+        if "malicious" in vt_lower:
+            return VerificationResult(
+                is_safe=False,
+                package_name=package_name,
+                package_manager=package_manager,
+                risk_level=RiskLevel.MALICIOUS,
+                reason=(
+                    f"Package '{package_name}' was flagged by VirusTotal "
+                    "during sandbox analysis."
+                ),
+                confidence=0.85,
+                metadata=metadata,
+            )
+
+        if "suspicious" in vt_lower:
+            return VerificationResult(
+                is_safe=False,
+                package_name=package_name,
+                package_manager=package_manager,
+                risk_level=RiskLevel.SUSPICIOUS,
+                reason=(
+                    f"Package '{package_name}' raised suspicion during "
+                    "VirusTotal analysis."
+                ),
+                confidence=0.70,
+                metadata=metadata,
+            )
+
+        # ── Check install failure ─────────────────────────────────────────────
+        if result.install_exit_code != 0:
+            return VerificationResult(
+                is_safe=False,
+                package_name=package_name,
+                package_manager=package_manager,
+                risk_level=RiskLevel.SUSPICIOUS,
+                reason=(
+                    f"Package '{package_name}' install failed inside sandbox "
+                    f"(exit code {result.install_exit_code}). This may "
+                    "indicate a malformed or malicious package."
+                ),
+                confidence=0.60,
+                metadata=metadata,
+            )
+
+        # ── All clear ────────────────────────────────────────────────────────
+        return VerificationResult(
+            is_safe=True,
+            package_name=package_name,
+            package_manager=package_manager,
+            risk_level=RiskLevel.SAFE,
+            reason=(
+                f"Package '{package_name}' installed successfully in a "
+                "Firecracker sandbox with no suspicious behaviour detected."
+            ),
+            confidence=0.90,
+            metadata=metadata,
+        )

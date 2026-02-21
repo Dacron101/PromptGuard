@@ -10,28 +10,31 @@ A security middleware wrapper for [Claude Code](https://docs.anthropic.com/claud
 User Terminal
      │
      ▼
-┌─────────────────────────────────────────────────┐
-│              claudeguard.py                      │
-│  ┌────────────────────────────────────────────┐  │
-│  │           TTYWrapper (PTY MITM)            │  │
-│  │  ┌──────────────┐   ┌──────────────────┐  │  │
-│  │  │CommandDetector│──▶│ SecurityChecker  │  │  │
-│  │  │  (regex FSM)  │   │ (Strategy Chain) │  │  │
-│  │  └──────────────┘   └──────────────────┘  │  │
-│  │          │                    │            │  │
-│  │  ┌───────▼────────────────────▼──────────┐ │  │
-│  │  │  BasicVerifier  │  DeepScanVerifier*  │ │  │
-│  │  │  (allowlist +   │  (Docker sandbox +  │ │  │
-│  │  │   heuristics)   │   VirusTotal stub)  │ │  │
-│  │  └─────────────────────────────────────┘ │  │
-│  └────────────────────────────────────────────┘  │
-│                        │                         │
-│            ┌───────────▼───────────┐             │
-│            │    claude (process)   │             │
-│            └───────────────────────┘             │
-└─────────────────────────────────────────────────┘
-
-* DeepScanVerifier is a planned stub — not yet active.
+┌─────────────────────────────────────────────────────┐
+│              claudeguard.py                         │
+│  ┌────────────────────────────────────────────────┐ │
+│  │           TTYWrapper (PTY MITM)                │ │
+│  │  ┌──────────────┐   ┌──────────────────────┐  │ │
+│  │  │CommandDetector│──▶│  SecurityChecker     │  │ │
+│  │  │  (regex FSM)  │   │  (Strategy Chain)    │  │ │
+│  │  └──────────────┘   └──────────────────────┘  │ │
+│  │          │                    │                │ │
+│  │  ┌───────▼────────────────────▼──────────────┐ │ │
+│  │  │  BasicVerifier  │  DeepScanVerifier       │ │ │
+│  │  │  (allowlist +   │  (Firecracker microVM + │ │ │
+│  │  │   heuristics)   │   VirusTotal scan)      │ │ │
+│  │  └───────────────────────────────────────────┘ │ │
+│  │                         │                      │ │
+│  │              ┌──────────▼──────────┐           │ │
+│  │              │ FirecrackerSandbox  │           │ │
+│  │              │ (isolated microVM)  │           │ │
+│  │              └─────────────────────┘           │ │
+│  └────────────────────────────────────────────────┘ │
+│                        │                            │
+│            ┌───────────▼───────────┐                │
+│            │    claude (process)   │                │
+│            └───────────────────────┘                │
+└─────────────────────────────────────────────────────┘
 ```
 
 1. The user runs `python claudeguard.py` instead of `claude`.
@@ -47,7 +50,7 @@ User Terminal
 ## Project Structure
 
 ```
-CodeGate/
+ClaudeGuard/
 ├── claudeguard.py               # Entry point — run this
 ├── requirements.txt
 │
@@ -55,13 +58,18 @@ CodeGate/
 │   ├── __init__.py
 │   ├── base.py                  # PackageVerifier ABC + VerificationResult
 │   ├── basic_verifier.py        # Offline allowlist + heuristic verifier
-│   ├── deep_scan_verifier.py    # Docker/VirusTotal stub (future)
+│   ├── deep_scan_verifier.py    # Firecracker microVM sandbox verifier
+│   ├── firecracker_sandbox.py   # Firecracker VM lifecycle manager
 │   └── checker.py               # SecurityChecker (Strategy orchestrator)
 │
-└── interceptor/                 # Runtime interception layer
-    ├── __init__.py
-    ├── command_detector.py      # Regex-based install command parser
-    └── tty_wrapper.py           # PTY Man-in-the-Middle proxy
+├── interceptor/                 # Runtime interception layer
+│   ├── __init__.py
+│   ├── command_detector.py      # Regex-based install command parser
+│   └── tty_wrapper.py           # PTY Man-in-the-Middle proxy
+│
+└── scripts/                     # Standalone utility scripts
+    ├── firecracker.py           # Original Firecracker setup reference
+    └── check_virustotal         # VirusTotal file scanner
 ```
 
 ---
@@ -96,6 +104,16 @@ python claudeguard.py --claude-cmd /usr/local/bin/claude
 # Allow unknown packages (warn instead of block)
 python claudeguard.py --allow-unknown
 
+# Enable Firecracker deep scan for unknown packages
+python claudeguard.py --deep-scan
+
+# Deep scan with custom Firecracker config
+python claudeguard.py --deep-scan \
+    --kernel-path /opt/firecracker/vmlinux \
+    --rootfs-path /opt/firecracker/rootfs.ext4 \
+    --vm-ip 172.16.0.2 \
+    --ssh-key-path ~/.ssh/firecracker_id_rsa
+
 # Verbose debug output
 python claudeguard.py --log-level DEBUG
 
@@ -126,15 +144,40 @@ python claudeguard.py --help
 2. Pass an instance as `fallback_verifier` to `SecurityChecker`.
 
 ```python
-# Future usage once DeepScanVerifier is implemented:
+# Usage with Firecracker deep scan:
 from security_engine.deep_scan_verifier import DeepScanVerifier
 from security_engine.checker import SecurityChecker
 
 checker = SecurityChecker(
     primary_verifier=BasicVerifier(),
-    fallback_verifier=DeepScanVerifier(virustotal_key="your_key"),
+    fallback_verifier=DeepScanVerifier(
+        kernel_path="./vmlinux",
+        rootfs_path="./rootfs.ext4",
+        vm_ip="172.16.0.2",
+        virustotal_key="your_key",
+    ),
 )
 ```
+
+---
+
+## Firecracker Deep Scan
+
+When `--deep-scan` is enabled, unknown packages (not in the BasicVerifier allowlist) are escalated to the `DeepScanVerifier`, which:
+
+1. **Spins up a Firecracker microVM** — an isolated virtual machine with its own kernel, providing hardware-level isolation via KVM.
+2. **Installs the package** inside the VM using the appropriate package manager.
+3. **Monitors for suspicious behaviour** — checks for writes to sensitive paths (`~/.ssh`, `/etc/cron.d`, etc.).
+4. **Runs VirusTotal scans** on newly installed files.
+5. **Returns a verdict** — `SAFE`, `SUSPICIOUS`, or `MALICIOUS`.
+6. **Tears down the VM** — no artefacts persist on the host.
+
+### Prerequisites
+
+- Linux host with `/dev/kvm` access
+- [`firecracker`](https://github.com/firecracker-microvm/firecracker) binary on PATH
+- A `vmlinux` kernel image and `rootfs.ext4` with package managers + Python 3 + `check_virustotal.py` pre-deployed
+- SSH key configured for `root@` (key-based, no password)
 
 ---
 
@@ -144,8 +187,8 @@ checker = SecurityChecker(
 - [x] Regex detection for 6 package managers
 - [x] Offline allowlist + heuristic verifier (`BasicVerifier`)
 - [x] Strategy Pattern verifier chain (`SecurityChecker`)
-- [ ] `DeepScanVerifier` — Docker sandbox (network-isolated container install)
-- [ ] `DeepScanVerifier` — VirusTotal file-hash submission
+- [x] `DeepScanVerifier` — Firecracker microVM sandbox
+- [x] `DeepScanVerifier` — VirusTotal file-hash submission (in-VM)
 - [ ] `DeepScanVerifier` — OSV/Snyk advisory lookup
 - [ ] `DeepScanVerifier` — ML-based typosquatting detector
 - [ ] PATH shim injection (proactive interception before execution)

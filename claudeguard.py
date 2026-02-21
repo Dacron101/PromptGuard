@@ -46,15 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from security_engine.basic_verifier import BasicVerifier
 from security_engine.checker import SecurityChecker
-
-# DeepScanVerifier is imported for the CLI flag, but kept disabled until
-# its implementation is complete.
-# FUTURE INJECTION POINT — DeepScanVerifier activation:
-#   from security_engine.deep_scan_verifier import DeepScanVerifier
-#   When --deep-scan is passed, construct:
-#       fallback = DeepScanVerifier(virustotal_key=os.getenv("VT_API_KEY"))
-#   and pass it to SecurityChecker(primary_verifier=..., fallback_verifier=fallback)
-
+from security_engine.deep_scan_verifier import DeepScanVerifier
 from interceptor.command_detector import CommandDetector
 from interceptor.tty_wrapper import TTYWrapper
 
@@ -91,9 +83,34 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help=(
-            "[NOT YET IMPLEMENTED] Enable DeepScanVerifier (Docker sandbox + "
-            "VirusTotal) as a fallback for unknown packages."
+            "Enable DeepScanVerifier (Firecracker microVM sandbox + "
+            "VirusTotal) as a fallback for unknown packages. Requires "
+            "the 'firecracker' binary, a vmlinux kernel, and rootfs.ext4."
         ),
+    )
+    parser.add_argument(
+        "--kernel-path",
+        default=os.getenv("FC_KERNEL_PATH", "./vmlinux"),
+        metavar="PATH",
+        help="Path to the vmlinux kernel image for Firecracker. Default: ./vmlinux",
+    )
+    parser.add_argument(
+        "--rootfs-path",
+        default=os.getenv("FC_ROOTFS_PATH", "./rootfs.ext4"),
+        metavar="PATH",
+        help="Path to the rootfs.ext4 image for Firecracker. Default: ./rootfs.ext4",
+    )
+    parser.add_argument(
+        "--vm-ip",
+        default=os.getenv("FC_VM_IP", "172.16.0.2"),
+        metavar="IP",
+        help="IP address of the Firecracker VM for SSH. Default: 172.16.0.2",
+    )
+    parser.add_argument(
+        "--ssh-key-path",
+        default=os.getenv("FC_SSH_KEY_PATH"),
+        metavar="PATH",
+        help="Path to the SSH private key for root@VM. Default: from FC_SSH_KEY_PATH env.",
     )
     parser.add_argument(
         "--log-level",
@@ -123,33 +140,29 @@ def build_security_checker(args: argparse.Namespace) -> SecurityChecker:
     """
     Construct the SecurityChecker from CLI arguments.
 
-    Current verifier chain:
+    Verifier chain:
         Primary  : BasicVerifier (always active)
-        Fallback : None (until --deep-scan is implemented)
-
-    FUTURE INJECTION POINT — Deep scan flag:
-        if args.deep_scan:
-            from security_engine.deep_scan_verifier import DeepScanVerifier
-            fallback = DeepScanVerifier(
-                virustotal_key=os.getenv("VT_API_KEY"),
-                timeout_seconds=120,
-            )
-        else:
-            fallback = None
-        return SecurityChecker(
-            primary_verifier=BasicVerifier(),
-            fallback_verifier=fallback,
-        )
+        Fallback : DeepScanVerifier (Firecracker sandbox, if --deep-scan)
     """
+    fallback = None
+
     if args.deep_scan:
-        logging.getLogger(__name__).warning(
-            "--deep-scan was requested but DeepScanVerifier is not yet "
-            "implemented. Falling back to BasicVerifier only."
+        logging.getLogger(__name__).info(
+            "--deep-scan enabled: DeepScanVerifier (Firecracker) will be "
+            "used as fallback for unknown packages."
+        )
+        fallback = DeepScanVerifier(
+            kernel_path=args.kernel_path,
+            rootfs_path=args.rootfs_path,
+            vm_ip=args.vm_ip,
+            ssh_key_path=args.ssh_key_path,
+            virustotal_key=os.getenv("VT_API_KEY"),
+            timeout_seconds=120,
         )
 
     return SecurityChecker(
         primary_verifier=BasicVerifier(),
-        fallback_verifier=None,
+        fallback_verifier=fallback,
     )
 
 
