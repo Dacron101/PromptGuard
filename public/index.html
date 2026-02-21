@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinGuard AI — Agentic Early Warning System</title>
+  <style>
+    /* ---- Design System ---- */
+    :root {
+      --bg: #0a0d14;
+      --surface: #111827;
+      --surface2: #1a2235;
+      --border: #1f2d45;
+      --accent: #3b82f6;
+      --accent-glow: rgba(59, 130, 246, 0.25);
+      --danger: #ef4444;
+      --danger-glow: rgba(239, 68, 68, 0.2);
+      --success: #22c55e;
+      --success-glow: rgba(34, 197, 94, 0.2);
+      --warning: #f59e0b;
+      --text: #e2e8f0;
+      --text-muted: #64748b;
+      --font: 'Inter', system-ui, sans-serif;
+      --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* ---- Header ---- */
+    header {
+      width: 100%;
+      padding: 24px 40px;
+      background: linear-gradient(180deg, rgba(59,130,246,0.08) 0%, transparent 100%);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .logo {
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      box-shadow: 0 0 20px var(--accent-glow);
+    }
+
+    header h1 {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    header h1 span {
+      color: var(--accent);
+    }
+
+    .badge {
+      margin-left: auto;
+      padding: 4px 12px;
+      background: rgba(59,130,246,0.15);
+      border: 1px solid rgba(59,130,246,0.3);
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    /* ---- Main Layout ---- */
+    main {
+      width: 100%;
+      max-width: 960px;
+      padding: 40px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+    }
+
+    /* ---- Hero ---- */
+    .hero {
+      text-align: center;
+      padding: 16px 0 8px;
+    }
+
+    .hero h2 {
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -1px;
+      background: linear-gradient(135deg, #e2e8f0 30%, #64748b);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 12px;
+    }
+
+    .hero p {
+      color: var(--text-muted);
+      font-size: 15px;
+      max-width: 520px;
+      margin: 0 auto;
+      line-height: 1.6;
+    }
+
+    /* ---- Status Bar ---- */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ---- Action Cards ---- */
+    .action-cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    @media (max-width: 640px) {
+      .action-cards { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .card:hover {
+      border-color: rgba(59,130,246,0.4);
+      box-shadow: 0 0 30px rgba(59,130,246,0.06);
+    }
+
+    .card-icon {
+      font-size: 28px;
+      line-height: 1;
+    }
+
+    .card h3 {
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1.3;
+    }
+
+    .card p {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* ---- Buttons ---- */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 20px;
+      border: none;
+      border-radius: 10px;
+      font-family: var(--font);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+      overflow: hidden;
+      letter-spacing: 0.1px;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      color: white;
+      box-shadow: 0 4px 15px rgba(59,130,246,0.3);
+    }
+
+    .btn-primary:not(:disabled):hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(59,130,246,0.45);
+    }
+
+    .btn-danger {
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      color: white;
+      box-shadow: 0 4px 15px rgba(239,68,68,0.3);
+    }
+
+    .btn-danger:not(:disabled):hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(239,68,68,0.45);
+    }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: none;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ---- Output Panel ---- */
+    .output-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+
+    .output-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .output-header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .output-dots {
+      display: flex;
+      gap: 5px;
+    }
+
+    .output-dots span {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .d1 { background: #ef4444; }
+    .d2 { background: #f59e0b; }
+    .d3 { background: #22c55e; }
+
+    #output {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.7;
+      color: #a8d8a8;
+      background: transparent;
+      padding: 24px;
+      min-height: 200px;
+      max-height: 520px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    #output.empty {
+      color: var(--text-muted);
+      font-family: var(--font);
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #output.error { color: #fca5a5; }
+
+    .clear-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-muted);
+      font-size: 11px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-family: var(--font);
+      transition: all 0.15s;
+    }
+
+    .clear-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* ---- Footer ---- */
+    footer {
+      margin-top: auto;
+      padding: 20px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    footer span { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header>
+    <div class="logo">🛡️</div>
+    <h1>FinGuard <span>AI</span></h1>
+    <div class="badge">Hackathon MVP</div>
+  </header>
+
+  <main>
+    <!-- Hero -->
+    <div class="hero">
+      <h2>Agentic Early Warning System</h2>
+      <p>
+        Predictive overdraft detection powered by a quantitative forecasting engine and 
+        Claude 3 Haiku — autonomously intervening before the default happens.
+      </p>
+    </div>
+
+    <!-- Status Bar -->
+    <div class="status-bar">
+      <div class="dot"></div>
+      <span>System online — targeting user <strong>user_123</strong></span>
+      <span style="margin-left: auto;">Claude 3 Haiku · Stripe · Firebase</span>
+    </div>
+
+    <!-- Action Cards -->
+    <div class="action-cards">
+
+      <!-- Card 1: Quant Model -->
+      <div class="card">
+        <div class="card-icon">📊</div>
+        <div>
+          <h3>Step 1: Predictive Quant Model</h3>
+          <p>
+            Fetches transaction history from Firestore, calculates average daily burn rate, 
+            sums upcoming fixed obligations, and forecasts the balance at next payday.
+          </p>
+        </div>
+        <button class="btn btn-primary" id="btn-forecast" onclick="runForecast()">
+          <div class="spinner" id="spin-forecast"></div>
+          <span id="lbl-forecast">▶ Run Quant Model</span>
+        </button>
+      </div>
+
+      <!-- Card 2: AI Agent -->
+      <div class="card">
+        <div class="card-icon">🤖</div>
+        <div>
+          <h3>Step 2: Deploy AI Rescue Agent</h3>
+          <p>
+            Triggers the full pipeline: quant forecast → Claude 3 Haiku analysis → 
+            Stripe subscription cancellation. Returns the complete intervention summary.
+          </p>
+        </div>
+        <button class="btn btn-danger" id="btn-intervene" onclick="runIntervention()">
+          <div class="spinner" id="spin-intervene"></div>
+          <span id="lbl-intervene">🚨 Deploy AI Agent</span>
+        </button>
+      </div>
+
+    </div>
+
+    <!-- Output Panel -->
+    <div class="output-panel">
+      <div class="output-header">
+        <div class="output-header-left">
+          <div class="output-dots">
+            <span class="d1"></span>
+            <span class="d2"></span>
+            <span class="d3"></span>
+          </div>
+          API Response
+        </div>
+        <button class="clear-btn" onclick="clearOutput()">Clear</button>
+      </div>
+      <pre id="output" class="empty">Waiting for a request... click a button above to begin.</pre>
+    </div>
+
+  </main>
+
+  <footer>
+    Built with ❤️ for the hackathon · Powered by <span>Claude 3 Haiku</span> + <span>Stripe</span> + <span>Firebase</span>
+  </footer>
+
+  <script>
+    const USER_ID = 'user_123';
+    const output = document.getElementById('output');
+
+    function setLoading(buttonId, spinnerId, labelId, loading, defaultLabel) {
+      const btn = document.getElementById(buttonId);
+      const spinner = document.getElementById(spinnerId);
+      const label = document.getElementById(labelId);
+      btn.disabled = loading;
+      spinner.style.display = loading ? 'block' : 'none';
+      label.textContent = loading ? 'Processing...' : defaultLabel;
+    }
+
+    function showOutput(data, isError = false) {
+      output.classList.remove('empty', 'error');
+      if (isError) output.classList.add('error');
+      output.textContent = JSON.stringify(data, null, 2);
+      // Scroll to top of output
+      output.scrollTop = 0;
+    }
+
+    function clearOutput() {
+      output.className = 'empty';
+      output.textContent = 'Waiting for a request... click a button above to begin.';
+    }
+
+    async function runForecast() {
+      setLoading('btn-forecast', 'spin-forecast', 'lbl-forecast', true, '▶ Run Quant Model');
+      output.className = '';
+      output.textContent = '⏳ Fetching Firestore data and running forecasting engine...';
+
+      try {
+        const res = await fetch(`/api/forecast/${USER_ID}`);
+        const data = await res.json();
+        showOutput(data, !data.success);
+
+        // Highlight risk status
+        if (data.forecast?.isAtRiskOfDefault) {
+          output.style.borderTop = '2px solid #ef4444';
+        } else {
+          output.style.borderTop = '2px solid #22c55e';
+        }
+      } catch (err) {
+        showOutput({ error: err.message, hint: 'Is the server running? Did you seed the DB?' }, true);
+      } finally {
+        setLoading('btn-forecast', 'spin-forecast', 'lbl-forecast', false, '▶ Run Quant Model');
+      }
+    }
+
+    async function runIntervention() {
+      setLoading('btn-intervene', 'spin-intervene', 'lbl-intervene', true, '🚨 Deploy AI Agent');
+      output.className = '';
+      output.textContent = '🤖 Running full pipeline: Forecast → Claude 3 Haiku → Stripe Executor...\n\nThis may take 5-15 seconds for the AI to respond.';
+      output.style.borderTop = '';
+
+      try {
+        const res = await fetch(`/api/intervene/${USER_ID}`, { method: 'POST' });
+        const data = await res.json();
+        showOutput(data, !data.success);
+        output.style.borderTop = '2px solid #f59e0b';
+      } catch (err) {
+        showOutput({ error: err.message, hint: 'Is the server running? Did you set ANTHROPIC_API_KEY in .env?' }, true);
+      } finally {
+        setLoading('btn-intervene', 'spin-intervene', 'lbl-intervene', false, '🚨 Deploy AI Agent');
+      }
+    }
+  </script>
+
+</body>
+</html>

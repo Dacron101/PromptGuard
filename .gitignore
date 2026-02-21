@@ -1,0 +1,6 @@
+node_modules/
+.env
+firebase.json
+*-service-account.json
+*serviceAccount*.json
+firebase-adminsdk*.json
