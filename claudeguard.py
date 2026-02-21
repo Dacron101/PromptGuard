@@ -40,6 +40,26 @@ import logging
 import sys
 import os
 
+# Project root directory (where this script lives)
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# Load .env file so VT_API_KEY and other config is available via os.getenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
+except ImportError:
+    # python-dotenv not installed — fall back to manual .env parsing
+    _env_path = os.path.join(_PROJECT_ROOT, ".env")
+    if os.path.isfile(_env_path):
+        with open(_env_path) as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line and not _line.startswith("#") and "=" in _line:
+                    _key, _, _val = _line.partition("=")
+                    _key = _key.strip()
+                    _val = _val.strip().strip('"').strip("'")
+                    os.environ.setdefault(_key, _val)
+
 # Ensure the project root is on sys.path so relative imports work when the
 # script is executed directly (not as a module).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -90,15 +110,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--kernel-path",
-        default=os.getenv("FC_KERNEL_PATH", "./vmlinux"),
+        default=os.getenv("FC_KERNEL_PATH", os.path.join(_PROJECT_ROOT, "kernels", "vmlinux-6.1.155")),
         metavar="PATH",
-        help="Path to the vmlinux kernel image for Firecracker. Default: ./vmlinux",
+        help="Path to the vmlinux kernel image for Firecracker. Default: kernels/vmlinux-6.1.155",
     )
     parser.add_argument(
         "--rootfs-path",
-        default=os.getenv("FC_ROOTFS_PATH", "./rootfs.ext4"),
+        default=os.getenv("FC_ROOTFS_PATH", os.path.join(_PROJECT_ROOT, "kernels", "ubuntu-24.04.ext4")),
         metavar="PATH",
-        help="Path to the rootfs.ext4 image for Firecracker. Default: ./rootfs.ext4",
+        help="Path to the rootfs.ext4 image for Firecracker. Default: kernels/ubuntu-24.04.ext4",
     )
     parser.add_argument(
         "--vm-ip",
@@ -108,9 +128,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--ssh-key-path",
-        default=os.getenv("FC_SSH_KEY_PATH"),
+        default=os.getenv("FC_SSH_KEY_PATH", os.path.join(_PROJECT_ROOT, "kernels", "ubuntu-24.04.id_rsa")),
         metavar="PATH",
-        help="Path to the SSH private key for root@VM. Default: from FC_SSH_KEY_PATH env.",
+        help="Path to the SSH private key for root@VM. Default: kernels/ubuntu-24.04.id_rsa",
     )
     parser.add_argument(
         "--log-level",

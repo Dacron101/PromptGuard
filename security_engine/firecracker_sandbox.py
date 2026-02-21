@@ -232,6 +232,17 @@ class FirecrackerSandbox:
         # ── Step 9: Wait for SSH to become available ───────────────────────────
         self._wait_for_ssh()
 
+        # ── Step 10: Configure DNS inside the VM ──────────────────────────────
+        # The VM boots with no /etc/resolv.conf, so package managers can't
+        # resolve domain names (e.g. pypi.org). Inject Google Public DNS.
+        self._configure_dns()
+
+        # ── Step 11: Deploy check_virustotal.py into the VM ───────────────────
+        self._deploy_virustotal_script()
+
+        # ── Step 12: Ensure 'requests' library is available in the VM ─────────
+        self._install_requests_in_vm()
+
     def run_command(self, cmd: str) -> Tuple[str, str, int]:
         """
         Execute a command inside the Firecracker VM via SSH.
@@ -267,11 +278,12 @@ class FirecrackerSandbox:
         Install a package inside the VM and analyse the results.
 
         Pipeline:
-          1. Snapshot suspicious filesystem paths (before install).
-          2. Run the install command for the given package manager.
-          3. Snapshot suspicious paths again (after install) and diff.
-          4. Run check_virustotal.py on newly installed files.
-          5. Return aggregated SandboxResult.
+          1. Download the package archive (e.g. .whl/.tar.gz) without installing.
+          2. Run VirusTotal scan on the downloaded package archive.
+          3. Snapshot suspicious filesystem paths (before install).
+          4. Run the actual install command.
+          5. Snapshot suspicious paths again (after install) and diff.
+          6. Return aggregated SandboxResult.
 
         Args:
             package_name    : The package to test-install.
@@ -281,11 +293,21 @@ class FirecrackerSandbox:
             SandboxResult with install output and analysis findings.
         """
         result = SandboxResult()
+        vt_all_results: list[str] = []
 
-        # ── Step 1: Pre-install filesystem snapshot ────────────────────────────
+        # ── Step 1: Download the package archive ──────────────────────────────
+        pkg_archive = self._download_package_archive(package_name, package_manager)
+
+        # ── Step 2: VirusTotal scan on the package archive ────────────────────
+        if pkg_archive:
+            vt_output = self._run_virustotal_scan_file(pkg_archive, package_name)
+            if vt_output:
+                vt_all_results.append(vt_output)
+
+        # ── Step 3: Pre-install filesystem snapshot ───────────────────────────
         pre_snapshot = self._snapshot_suspicious_paths()
 
-        # ── Step 2: Run the install command ───────────────────────────────────
+        # ── Step 4: Run the install command ───────────────────────────────────
         install_cmd = self._build_install_command(package_name, package_manager)
         if install_cmd is None:
             result.install_stderr = f"Unsupported package manager: {package_manager}"
@@ -299,7 +321,7 @@ class FirecrackerSandbox:
         result.install_stderr = stderr
         result.install_exit_code = exit_code
 
-        # ── Step 3: Post-install snapshot + diff ──────────────────────────────
+        # ── Step 5: Post-install snapshot + diff ──────────────────────────────
         post_snapshot = self._snapshot_suspicious_paths()
         new_suspicious = set(post_snapshot) - set(pre_snapshot)
         result.suspicious_files = sorted(new_suspicious)
@@ -311,12 +333,23 @@ class FirecrackerSandbox:
             )
             result.is_suspicious = True
 
-        # ── Step 4: VirusTotal scan on installed files ────────────────────────
-        vt_output = self._run_virustotal_scan()
-        result.virustotal_output = vt_output
+        # ── Step 6: Scan .py files from the package's root directory ──────────
+        if exit_code == 0:
+            py_results = self._scan_package_py_files(package_name, package_manager)
+            vt_all_results.extend(py_results)
 
-        if "malicious" in vt_output.lower() or "suspicious" in vt_output.lower():
-            result.is_suspicious = True
+        # ── Aggregate all VT results ──────────────────────────────────────────
+        result.virustotal_output = "\n".join(vt_all_results)
+
+        # Check VT results for malicious/suspicious verdicts
+        for vt_line in vt_all_results:
+            try:
+                vt_data = json.loads(vt_line)
+                if vt_data.get("malicious", 0) > 0 or vt_data.get("suspicious", 0) > 0:
+                    result.is_suspicious = True
+                    break
+            except (json.JSONDecodeError, TypeError):
+                pass
 
         logger.info(
             "Install test done | pkg=%s exit=%d suspicious=%s",
@@ -449,7 +482,6 @@ class FirecrackerSandbox:
         self._api_put("/machine-config", {
             "vcpu_count": self._vcpu_count,
             "mem_size_mib": self._mem_size_mib,
-            "ht_enabled": False,
         })
         logger.debug(
             "Machine config: vcpus=%d mem=%dMiB",
@@ -516,6 +548,84 @@ class FirecrackerSandbox:
             max_retries,
         )
 
+    def _deploy_virustotal_script(self) -> None:
+        """
+        SCP the check_virustotal.py script from the host into the VM.
+
+        The script must exist at /usr/local/bin/check_virustotal.py inside
+        the VM for _run_virustotal_scan() to call it.
+        """
+        # Resolve script path relative to this source file
+        this_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(this_dir)
+        script_path = os.path.join(project_root, "scripts", "check_virustotal.py")
+
+        if not os.path.isfile(script_path):
+            logger.warning(
+                "check_virustotal.py not found at %s — VT scanning disabled",
+                script_path,
+            )
+            return
+
+        scp_args = [
+            "scp",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+        ]
+        if self._ssh_key_path:
+            scp_args.extend(["-i", self._ssh_key_path])
+        scp_args.extend([
+            script_path,
+            f"root@{self._vm_ip}:/usr/local/bin/check_virustotal.py",
+        ])
+
+        try:
+            result = subprocess.run(
+                scp_args, capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                # Make it executable
+                self.run_command("chmod +x /usr/local/bin/check_virustotal.py")
+                logger.info("Deployed check_virustotal.py to VM")
+                print("[ClaudeGuard]   ✓ check_virustotal.py deployed to VM")
+            else:
+                logger.warning("Failed to SCP check_virustotal.py: %s", result.stderr)
+        except subprocess.TimeoutExpired:
+            logger.warning("SCP of check_virustotal.py timed out")
+
+    def _install_requests_in_vm(self) -> None:
+        """
+        Ensure the Python 'requests' library is available inside the VM.
+        check_virustotal.py imports 'requests' to talk to the VT API.
+        """
+        stdout, stderr, code = self.run_command(
+            "python3 -c 'import requests' 2>&1 || "
+            "pip3 install --quiet requests 2>&1"
+        )
+        if code == 0:
+            logger.debug("Python 'requests' available in VM")
+        else:
+            logger.warning("Could not install 'requests' in VM: %s", stderr)
+
+    def _configure_dns(self) -> None:
+        """
+        Write /etc/resolv.conf inside the VM with public DNS servers.
+
+        The VM kernel's ip= boot parameter configures the network interface
+        but does NOT set up DNS. Without this, pip/npm/cargo can't resolve
+        package registry hostnames like pypi.org or registry.npmjs.org.
+        """
+        dns_cmd = (
+            'echo -e "nameserver 8.8.8.8\\nnameserver 8.8.4.4" '
+            "> /etc/resolv.conf"
+        )
+        stdout, stderr, code = self.run_command(dns_cmd)
+        if code == 0:
+            logger.debug("DNS configured inside VM (8.8.8.8, 8.8.4.4)")
+        else:
+            logger.warning("Failed to configure DNS in VM: %s", stderr)
+
     # ── Private: SSH helpers ──────────────────────────────────────────────────
 
     def _build_ssh_args(self, cmd: str) -> list[str]:
@@ -562,43 +672,173 @@ class FirecrackerSandbox:
             return None
         return template.format(pkg=shlex.quote(package_name))
 
-    def _run_virustotal_scan(self) -> str:
+    def _download_package_archive(
+        self, package_name: str, package_manager: str
+    ) -> Optional[str]:
         """
-        Run check_virustotal.py inside the VM against installed package files.
+        Download the package archive (e.g. .whl/.tar.gz) without installing.
 
-        Scans up to 10 files from /tmp/pkg_test. The VirusTotal API key is
-        injected as an environment variable inline in the SSH command so it
-        is available to the script without persisting it in the rootfs.
+        Uses `pip download --no-deps` to get just the target package file,
+        not its dependencies. Returns the path to the downloaded archive
+        inside the VM, or None if the download failed or the manager is
+        not supported for download.
+        """
+        download_cmds = {
+            "pip": f"pip3 download --no-deps -d /tmp/pkg_download {shlex.quote(package_name)}",
+            "npm": f"npm pack {shlex.quote(package_name)} --pack-destination /tmp/pkg_download",
+        }
 
-        Returns the combined stdout from all VT scan calls (JSON lines), or
-        an empty string if no files were found or VT key is not configured.
+        dl_cmd = download_cmds.get(package_manager.lower())
+        if dl_cmd is None:
+            print(f"[ClaudeGuard]   ⚠ Package download not supported for '{package_manager}' — skipping VT scan")
+            return None
+
+        # Create download directory
+        self.run_command("mkdir -p /tmp/pkg_download")
+
+        print(f"[ClaudeGuard]   📥 Downloading '{package_name}' package archive...")
+        stdout, stderr, code = self.run_command(dl_cmd)
+
+        if code != 0:
+            print(f"[ClaudeGuard]   ⚠ Package download failed (exit {code})")
+            logger.debug("Download stderr: %s", stderr[:300])
+            return None
+
+        # Find the downloaded file
+        find_stdout, _, _ = self.run_command(
+            "ls -1 /tmp/pkg_download/ 2>/dev/null | head -5"
+        )
+        if not find_stdout.strip():
+            print("[ClaudeGuard]   ⚠ No archive file found after download")
+            return None
+
+        # Get the first (and usually only) file
+        archive_name = find_stdout.strip().splitlines()[0].strip()
+        archive_path = f"/tmp/pkg_download/{archive_name}"
+        print(f"[ClaudeGuard]   ✓ Downloaded: {archive_name}")
+        return archive_path
+
+    def _run_virustotal_scan_file(self, file_path: str, package_name: str) -> str:
+        """
+        Run check_virustotal.py inside the VM on a single file.
+
+        Scans the package archive (e.g. arrow-1.3.0.tar.gz) rather than
+        individual installed files, giving a single clear verdict for the
+        whole package.
+
+        Returns the JSON stdout from check_virustotal.py, or empty string
+        on error.
         """
         if not self._virustotal_key:
-            logger.debug("No VT API key configured — skipping VirusTotal scan")
+            print("[ClaudeGuard]   ⚠ No VT_API_KEY configured — skipping VirusTotal scan")
             return ""
 
+        filename = os.path.basename(file_path)
+        print(f"[ClaudeGuard]   🔍 Scanning '{filename}' with VirusTotal...")
+
+        safe_key = shlex.quote(self._virustotal_key)
+        safe_path = shlex.quote(file_path)
+
+        scan_cmd = (
+            f"VT_API_KEY={safe_key} "
+            f"python3 /usr/local/bin/check_virustotal.py {safe_path}"
+        )
+        scan_stdout, scan_stderr, scan_code = self.run_command(scan_cmd)
+
+        if scan_stdout.strip():
+            try:
+                vt_data = json.loads(scan_stdout.strip())
+                status = vt_data.get('status', 'unknown')
+                mal = vt_data.get('malicious', 0)
+                sus = vt_data.get('suspicious', 0)
+                sha = vt_data.get('sha256', 'unknown')[:16]
+                print(
+                    f"[ClaudeGuard]   → VT verdict: status={status} "
+                    f"malicious={mal} suspicious={sus} sha256={sha}..."
+                )
+            except json.JSONDecodeError:
+                print(f"[ClaudeGuard]   → VT raw output: {scan_stdout[:150]}")
+            return scan_stdout.strip()
+        else:
+            print(f"[ClaudeGuard]   → VT returned no output (exit={scan_code})")
+            if scan_stderr.strip():
+                print(f"[ClaudeGuard]   → stderr: {scan_stderr[:200]}")
+            return ""
+
+    def _scan_package_py_files(
+        self, package_name: str, package_manager: str
+    ) -> list[str]:
+        """
+        Find and scan .py files from the package's root directory with VT.
+
+        After pip install --target /tmp/pkg_test, the package's own code
+        lives at /tmp/pkg_test/<package_name>/*.py. We scan only those
+        files — not dependency .py files in other subdirectories.
+
+        Args:
+            package_name    : The installed package name.
+            package_manager : The package manager used.
+
+        Returns:
+            List of JSON result strings from check_virustotal.py.
+        """
+        if not self._virustotal_key:
+            return []
+
+        if package_manager.lower() != "pip":
+            return []
+
+        # Normalise: pip packages use underscores in directory names
+        pkg_dir = package_name.replace("-", "_").lower()
+        pkg_path = f"/tmp/pkg_test/{pkg_dir}"
+
+        # Find .py files in the package's root directory (maxdepth 1)
         stdout, _, code = self.run_command(
-            "find /tmp/pkg_test -type f 2>/dev/null | head -20"
+            f"find {shlex.quote(pkg_path)} -maxdepth 1 -name '*.py' -type f 2>/dev/null"
         )
         if code != 0 or not stdout.strip():
-            logger.debug("No installed files found for VirusTotal scan")
-            return ""
+            # Try without normalisation (some packages keep hyphens)
+            pkg_path_alt = f"/tmp/pkg_test/{package_name.lower()}"
+            stdout, _, code = self.run_command(
+                f"find {shlex.quote(pkg_path_alt)} -maxdepth 1 -name '*.py' -type f 2>/dev/null"
+            )
+            if code != 0 or not stdout.strip():
+                print(f"[ClaudeGuard]   ℹ No .py files found in package root directory")
+                return []
 
-        files = stdout.strip().splitlines()
-        vt_results: list[str] = []
-        # Sanitise the VT key: it should only contain alphanumeric chars
+        py_files = stdout.strip().splitlines()
+        print(f"[ClaudeGuard]   📄 Found {len(py_files)} .py files in package root — scanning with VT...")
+
         safe_key = shlex.quote(self._virustotal_key)
+        results: list[str] = []
 
-        for filepath in files[:10]:  # Cap at 10 to stay within API rate limits
-            safe_path = shlex.quote(filepath.strip())
+        for i, filepath in enumerate(py_files[:10], 1):
+            filepath = filepath.strip()
+            filename = os.path.basename(filepath)
+            print(f"[ClaudeGuard]   [{i}/{min(len(py_files), 10)}] Scanning: {filename}")
+
+            safe_path = shlex.quote(filepath)
             scan_cmd = (
                 f"VT_API_KEY={safe_key} "
                 f"python3 /usr/local/bin/check_virustotal.py {safe_path}"
             )
-            scan_stdout, _, scan_code = self.run_command(scan_cmd)
-            if scan_stdout.strip():
-                vt_results.append(scan_stdout.strip())
-                logger.debug("VT result for %s: %s", filepath, scan_stdout[:200])
+            scan_stdout, scan_stderr, scan_code = self.run_command(scan_cmd)
 
-        combined = "\n".join(vt_results)
-        return combined
+            if scan_stdout.strip():
+                results.append(scan_stdout.strip())
+                try:
+                    vt_data = json.loads(scan_stdout.strip())
+                    status = vt_data.get('status', 'unknown')
+                    mal = vt_data.get('malicious', 0)
+                    sus = vt_data.get('suspicious', 0)
+                    print(
+                        f"[ClaudeGuard]     → {filename}: status={status} "
+                        f"malicious={mal} suspicious={sus}"
+                    )
+                except json.JSONDecodeError:
+                    print(f"[ClaudeGuard]     → {filename}: {scan_stdout[:100]}")
+            else:
+                print(f"[ClaudeGuard]     → {filename}: no VT output (exit={scan_code})")
+
+        print(f"[ClaudeGuard]   ✓ .py file scan complete: {len(results)}/{len(py_files)} files analysed")
+        return results

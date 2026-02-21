@@ -1,4 +1,7 @@
 node_modules/
+kernels/
+squashfs-root/
+ubuntu-*.ext4
 .env
 firebase.json
 *-service-account.json

@@ -208,6 +208,8 @@ class DeepScanVerifier(PackageVerifier):
         """
         metadata = {
             "install_exit_code": result.install_exit_code,
+            "install_stdout": result.install_stdout[:500] if result.install_stdout else "",
+            "install_stderr": result.install_stderr[:500] if result.install_stderr else "",
             "suspicious_files": result.suspicious_files,
             "virustotal_output": result.virustotal_output[:500],
             "sandbox_engine": "firecracker",
