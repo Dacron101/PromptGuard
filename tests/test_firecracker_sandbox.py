@@ -262,30 +262,29 @@ class TestFirecrackerSandbox(unittest.TestCase):
 
     @patch("security_engine.firecracker_sandbox.subprocess.run")
     def test_run_virustotal_scan_skipped_without_key(self, mock_run):
-        """_run_virustotal_scan() should return empty string when no VT key is set."""
+        """_run_virustotal_scan_file() should return empty string when no VT key is set."""
         sandbox = FirecrackerSandbox(virustotal_key=None)
-        result = sandbox._run_virustotal_scan()
+        result = sandbox._run_virustotal_scan_file("/tmp/pkg.tar.gz", "requests")
 
         self.assertEqual(result, "")
         mock_run.assert_not_called()
 
     @patch("security_engine.firecracker_sandbox.subprocess.run")
     def test_run_virustotal_scan_injects_key_in_command(self, mock_run):
-        """_run_virustotal_scan() should inject VT_API_KEY inline in the SSH command."""
-        # First call (find files) returns a file path; subsequent calls return VT output
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="/tmp/pkg_test/requests/__init__.py\n", stderr=""),
-            MagicMock(returncode=0, stdout='{"status": "clean"}', stderr=""),
-        ]
+        """_run_virustotal_scan_file() should inject VT_API_KEY inline in the SSH command."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout='{"status": "clean", "malicious": 0, "suspicious": 0}',
+            stderr="",
+        )
 
         sandbox = FirecrackerSandbox(virustotal_key="test-vt-key-123")
-        result = sandbox._run_virustotal_scan()
+        result = sandbox._run_virustotal_scan_file("/tmp/pkg.tar.gz", "requests")
 
-        self.assertIn('{"status": "clean"}', result)
+        self.assertIn('"status"', result)
         # Check that VT key was embedded in the SSH command
-        scan_call_args = mock_run.call_args_list[1][0][0]
-        # The SSH command is the last element of the args list
-        ssh_cmd = scan_call_args[-1]
+        call_args = mock_run.call_args[0][0]
+        ssh_cmd = call_args[-1]
         self.assertIn("VT_API_KEY=", ssh_cmd)
         self.assertIn("check_virustotal.py", ssh_cmd)
 
