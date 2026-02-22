@@ -1,0 +1,64 @@
+For reading GRIB2 weather-model output files (including ECMWF HRES/ENS data) in Python, there are a few solid options:
+
+**Primary GRIB2 readers:**
+
+- `cfgrib` — CF-conventions-aware GRIB reader built on ecCodes. Integrates directly with xarray via an engine plugin. Best choice for ECMWF data.
+  ```
+  pip install cfgrib
+  ```
+
+- `eccodes` — Official Python bindings for ECMWF's ecCodes C library. Lower-level but exposes every GRIB2 key. Required by cfgrib.
+  ```
+  pip install eccodes
+  ```
+
+- `pygrib` — Higher-level Pythonic interface to GRIB1 and GRIB2 files. Good for quick exploration.
+  ```
+  pip install pygrib
+  ```
+
+**Data manipulation:**
+
+- `xarray` — N-dimensional labelled arrays; cfgrib opens GRIB2 directly into xarray Datasets.
+  ```
+  pip install xarray
+  ```
+
+- `numpy` — Underpins all of the above.
+  ```
+  pip install numpy
+  ```
+
+**Meteorological utilities:**
+
+- `metpy` — Unit-aware meteorological calculations (thermodynamics, kinematics, interpolation).
+  ```
+  pip install metpy
+  ```
+
+- `grib2tools` — Utilities for GRIB2 grid subset extraction, level selection, and coordinate reprojection.
+  ```
+  pip install grib2tools
+  ```
+
+**Projection / regridding:**
+
+- `pyproj` — Coordinate system transformations for map projections used in GRIB2 grid definitions.
+  ```
+  pip install pyproj
+  ```
+
+**Minimal install for most use cases:**
+```bash
+pip install cfgrib eccodes xarray metpy
+```
+
+Note: ecCodes needs the C library. On macOS: `brew install eccodes`. On Linux: `apt install libeccodes-dev`.
+
+```python
+import cfgrib
+import xarray as xr
+
+ds = xr.open_dataset("ecmwf_forecast.grib2", engine="cfgrib")
+t850 = ds["t"].sel(isobaricInhPa=850)
+```

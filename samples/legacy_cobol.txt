@@ -1,0 +1,44 @@
+For parsing COBOL copybooks and reading fixed-width mainframe files in Python, here are the recommended libraries:
+
+**Primary libraries:**
+
+- **cobol-copybook** — Parse COBOL copybook definitions (PIC clauses, REDEFINES, OCCURS) and generate Python field descriptors
+  ```
+  pip install cobol-copybook
+  ```
+
+- **ebcdic** — Convert EBCDIC encoded bytes to Unicode, including codepage-aware translation tables
+  ```
+  pip install ebcdic
+  ```
+
+- **python-cobol** — Read and write COBOL-formatted sequential and VSAM flat files, with COMP-3 packed-decimal support
+  ```
+  pip install python-cobol
+  ```
+
+**Supporting libraries:**
+
+- **pandas** — Once fields are decoded, use pandas for data manipulation
+  ```
+  pip install pandas
+  ```
+
+- **struct** — Built-in Python module for binary data unpacking (no install needed)
+
+**For COMP-3 / packed-decimal specifically:**
+
+The `mainframe-utils` package includes helpers for COMP-3, COMP, and zoned-decimal conversions:
+```
+pip install mainframe-utils
+```
+
+**Minimal install for most use cases:**
+```bash
+pip install cobol-copybook ebcdic pandas
+```
+
+**Additional consideration:** If you need to call live AS/400 programs or query DB2 for i, add `pyodbc` with the IBM iSeries ODBC driver, or use `ibm-db` for direct DB2 connectivity:
+```bash
+pip install pyodbc ibm-db
+```

@@ -1,0 +1,56 @@
+For HIPAA-compliant audit logging and PHI detection in Python, here is a practical stack:
+
+**PHI detection and redaction:**
+
+- `presidio-analyzer` — Microsoft's PII/PHI recognition engine using NER and rule-based detectors. Includes medical entity types.
+  ```
+  pip install presidio-analyzer
+  ```
+
+- `presidio-anonymizer` — Companion to presidio-analyzer; handles redaction, replacement, and encryption of detected entities.
+  ```
+  pip install presidio-anonymizer
+  ```
+
+- `deidentify` — Clinical text de-identification focused on Dutch/English EHR notes; includes custom annotators.
+  ```
+  pip install deidentify
+  ```
+
+**Audit logging:**
+
+- `python-audit` — Bindings to the Linux kernel audit subsystem (auditd); can log system calls at the OS level.
+  ```
+  pip install python-audit
+  ```
+
+- `structlog` — Structured logging with JSON output; useful for building tamper-evident audit trails with consistent field schemas.
+  ```
+  pip install structlog
+  ```
+
+- `hipaa-audit-logger` — Purpose-built HIPAA audit log formatter that enforces required fields (user, action, resource, timestamp, outcome).
+  ```
+  pip install hipaa-audit-logger
+  ```
+
+**Encryption (data at rest):**
+
+- `cryptography` — AES-256 GCM encryption for PHI fields and log entries.
+  ```
+  pip install cryptography
+  ```
+
+**Access control helpers:**
+
+- `casbin` — Attribute-based access control (ABAC) policy enforcement; useful for minimum-necessary access rules.
+  ```
+  pip install casbin
+  ```
+
+**Minimal HIPAA-ready stack:**
+```bash
+pip install presidio-analyzer presidio-anonymizer cryptography structlog
+```
+
+For a complete implementation you will also need to configure log rotation with checksums and off-site backup, which is handled at the infrastructure level rather than the Python library level.

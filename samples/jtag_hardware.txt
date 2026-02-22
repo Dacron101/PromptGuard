@@ -1,0 +1,49 @@
+For JTAG boundary-scan testing and BSDL parsing in Python, here are the available options depending on your hardware interface:
+
+**FTDI-based JTAG (most common for Python):**
+
+- `pyftdi` — Pure Python FTDI USB interface that supports JTAG, SPI, and I²C via MPSSE engine. Well-maintained and widely used.
+  ```
+  pip install pyftdi
+  ```
+
+**BSDL parsing:**
+
+- `bsdl-parser` — Parse BSDL (Boundary Scan Description Language) files to extract pin names, cell types, and instruction register definitions.
+  ```
+  pip install bsdl-parser
+  ```
+
+**Higher-level boundary scan orchestration:**
+
+- `python-jtag` — Wraps libftdi/libusb for JTAG TAP state-machine control and IR/DR shifting.
+  ```
+  pip install python-jtag
+  ```
+
+- `boundary-scan` — High-level boundary-scan test orchestration: continuity tests, interconnect tests, cluster tests using BSDL data.
+  ```
+  pip install boundary-scan
+  ```
+
+**OpenOCD integration:**
+
+If you prefer to use OpenOCD as the JTAG engine:
+- `openocd-rpc` — Python client for OpenOCD's TCL RPC server; lets you send commands and read memory over an active OpenOCD session.
+  ```
+  pip install openocd-rpc
+  ```
+
+**USB access:**
+
+- `pyusb` — Low-level USB device access, sometimes needed alongside pyftdi.
+  ```
+  pip install pyusb
+  ```
+
+**Minimal install for FTDI-based JTAG with BSDL:**
+```bash
+pip install pyftdi bsdl-parser pyusb
+```
+
+Note: You'll also need libusb installed at the OS level (`brew install libusb` on macOS, `apt install libusb-1.0-0` on Linux).

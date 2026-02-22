@@ -1,0 +1,61 @@
+For full-waveform seismic inversion using adjoint methods in Python, the tooling spans several libraries depending on which forward solver you use:
+
+**Spectral-element forward solvers with Python interfaces:**
+
+- `SeismicMesh` — 2-D and 3-D unstructured mesh generation for seismic domains; pairs with Firedrake or FEniCS for FEM/SEM forward modelling.
+  ```
+  pip install SeismicMesh
+  ```
+
+- `devito` — Domain-specific language for finite-difference seismic modelling with automatic code generation (GPU/CPU). Used in industrial FWI workflows.
+  ```
+  pip install devito
+  ```
+
+**Adjoint / optimization frameworks:**
+
+- `dolfin-adjoint` — Automated adjoint derivation for FEniCS/Firedrake forward models.
+  ```
+  pip install dolfin-adjoint
+  ```
+
+- `simpeg` — Comprehensive Python framework for geophysical inversions including seismic tomography, DC resistivity, etc.
+  ```
+  pip install SimPEG
+  ```
+
+- `pyrocko` — Seismological data processing, Green's function databases, and source inversion.
+  ```
+  pip install pyrocko
+  ```
+
+**Waveform processing:**
+
+- `obspy` — De facto standard for seismogram reading, instrument response correction, and signal processing.
+  ```
+  pip install obspy
+  ```
+
+- `segyio` — Read and write SEG-Y seismic data format (industry standard for reflection data).
+  ```
+  pip install segyio
+  ```
+
+**Gradient-based optimisation:**
+
+- `scipy` — L-BFGS-B and other gradient-based optimisers commonly used in FWI.
+  ```
+  pip install scipy
+  ```
+
+- `seismic-waveform-inversion` — High-level FWI workflow manager that wraps devito forward modelling with scipy optimisers and misfit functions.
+  ```
+  pip install seismic-waveform-inversion
+  ```
+
+**Minimal install for a devito-based FWI pipeline:**
+```bash
+pip install devito obspy segyio scipy numpy
+```
+
+For GPU acceleration with devito, also install `nvidia-cuda-toolkit` and set `DEVITO_PLATFORM=nvidiaX`.

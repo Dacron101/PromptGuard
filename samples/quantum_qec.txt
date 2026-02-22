@@ -1,0 +1,49 @@
+For quantum error correction simulation in Python, the ecosystem has matured significantly. Here are the key libraries:
+
+**Core simulation:**
+
+- `stim` — Extremely fast Clifford circuit simulator purpose-built for QEC. Supports surface codes, color codes, and custom stabiliser codes. Handles syndrome extraction natively.
+  ```
+  pip install stim
+  ```
+
+- `qiskit` — IBM's comprehensive framework; includes Aer simulator and noise models. Heavier but very full-featured.
+  ```
+  pip install qiskit qiskit-aer
+  ```
+
+**Decoding:**
+
+- `pymatching` — High-performance minimum-weight perfect-matching decoder for surface codes and other planar codes. Written in C++ with Python bindings.
+  ```
+  pip install pymatching
+  ```
+
+- `beliefmatching` — Belief propagation + matching hybrid decoder; useful for LDPC-based codes.
+  ```
+  pip install beliefmatching
+  ```
+
+- `ldpc` — LDPC code construction and sparse belief-propagation decoding.
+  ```
+  pip install ldpc
+  ```
+
+**Code construction and analysis:**
+
+- `qecc-toolkit` — Provides stabiliser code analysis, code distance computation, and logical operator identification.
+  ```
+  pip install qecc-toolkit
+  ```
+
+- `stabilizer-sim` — Lightweight stabiliser formalism simulator for small codes with exact computation.
+  ```
+  pip install stabilizer-sim
+  ```
+
+**Recommended minimal install for surface code experiments:**
+```bash
+pip install stim pymatching ldpc
+```
+
+For threshold calculations and Monte Carlo sampling, combine stim's fast sampling with pymatching's decoder. The stim documentation includes worked examples for rotated surface code thresholds.
