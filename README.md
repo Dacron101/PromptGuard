@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # PromptGate
+=======
+# PromptGuard
+>>>>>>> b6f525fb359db8c4dec161f582045d943f20dc60
 
 A security middleware wrapper for [Claude Code](https://docs.anthropic.com/claude/claude-code) that intercepts package installation commands in real time, verifies them against a trusted allowlist and heuristic rules, and blocks potentially malicious or hallucinated packages before they can execute.
 

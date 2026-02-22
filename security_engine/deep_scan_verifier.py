@@ -35,16 +35,19 @@ from typing import Optional
 
 from .base import PackageVerifier, VerificationResult, RiskLevel
 from .firecracker_sandbox import FirecrackerSandbox, SandboxResult
+from .gemini_explainer import GeminiExplainer
 
 logger = logging.getLogger(__name__)
 
 
 class DeepScanVerifier(PackageVerifier):
     """
-    Firecracker-backed package verifier.
+    Firecracker-backed package verifier with Gemini-powered threat explanations.
 
     Installs the candidate package inside an isolated microVM, analyses
-    the results, and returns a VerificationResult.
+    the results, and returns a VerificationResult. When a threat is detected
+    (via VirusTotal or suspicious filesystem writes), the GeminiExplainer is
+    called to generate a concise, human-readable explanation of the block.
 
     Configuration (all injected via __init__ for testability):
         kernel_path     : Path to the vmlinux kernel image.
@@ -52,6 +55,8 @@ class DeepScanVerifier(PackageVerifier):
         vm_ip           : IP address for SSH into the VM.
         ssh_key_path    : Path to the SSH private key for root@vm.
         virustotal_key  : VirusTotal API v3 key (for the in-VM scanner).
+        gemini_api_key  : Google AI Studio key for threat explanations.
+                          If None, the explainer falls back to a template.
         timeout_seconds : Hard wall-clock limit for the entire scan pipeline.
         vcpu_count      : Number of virtual CPUs for the VM.
         mem_size_mib    : Memory allocation in MiB.
@@ -64,6 +69,7 @@ class DeepScanVerifier(PackageVerifier):
         vm_ip: str = "172.16.0.2",
         ssh_key_path: Optional[str] = None,
         virustotal_key: Optional[str] = None,
+        gemini_api_key: Optional[str] = None,
         timeout_seconds: int = 120,
         vcpu_count: int = 1,
         mem_size_mib: int = 256,
@@ -77,9 +83,14 @@ class DeepScanVerifier(PackageVerifier):
         self._vcpu_count = vcpu_count
         self._mem_size_mib = mem_size_mib
 
+        # GeminiExplainer is optional — if no key is provided it falls back
+        # to a deterministic template so the pipeline never breaks.
+        self._explainer = GeminiExplainer(gemini_api_key) if gemini_api_key else None
+
         logger.info(
-            "DeepScanVerifier initialised | kernel=%s rootfs=%s vm_ip=%s",
+            "DeepScanVerifier initialised | kernel=%s rootfs=%s vm_ip=%s gemini=%s",
             kernel_path, rootfs_path, vm_ip,
+            "enabled" if gemini_api_key else "disabled (fallback mode)",
         )
 
     @property
@@ -191,6 +202,41 @@ class DeepScanVerifier(PackageVerifier):
 
         return total_malicious, total_suspicious
 
+    def _explain(
+        self,
+        package_name: str,
+        package_manager: str,
+        vt_malicious: int = 0,
+        vt_suspicious: int = 0,
+        suspicious_files: Optional[list[str]] = None,
+        vt_raw_output: str = "",
+    ) -> str:
+        """
+        Generate a human-readable block reason via Gemini (or the fallback).
+
+        If a GeminiExplainer is configured, it asks gemini-2.0-flash-lite for
+        a concise, threat-specific explanation. Otherwise it calls the built-in
+        fallback template inside GeminiExplainer so the return value is always
+        a non-empty string regardless of API availability.
+        """
+        if self._explainer is not None:
+            return self._explainer.explain(
+                package_name=package_name,
+                package_manager=package_manager,
+                vt_malicious=vt_malicious,
+                vt_suspicious=vt_suspicious,
+                suspicious_files=suspicious_files or [],
+                vt_raw_output=vt_raw_output,
+            )
+        # No Gemini key — use the static fallback directly
+        return GeminiExplainer._fallback(
+            package_name=package_name,
+            package_manager=package_manager,
+            vt_malicious=vt_malicious,
+            vt_suspicious=vt_suspicious,
+            suspicious_files=suspicious_files or [],
+        )
+
     def _build_verdict(
         self,
         package_name: str,
@@ -217,50 +263,56 @@ class DeepScanVerifier(PackageVerifier):
 
         # ── Check for malicious indicators ────────────────────────────────────
         if result.suspicious_files:
+            reason = self._explain(
+                package_name=package_name,
+                package_manager=package_manager,
+                suspicious_files=result.suspicious_files,
+            )
             return VerificationResult(
                 is_safe=False,
                 package_name=package_name,
                 package_manager=package_manager,
                 risk_level=RiskLevel.MALICIOUS,
-                reason=(
-                    f"Package '{package_name}' wrote to suspicious locations "
-                    f"during installation: {', '.join(result.suspicious_files[:5])}"
-                ),
+                reason=reason,
                 confidence=0.90,
                 metadata=metadata,
             )
 
         # ── Check VirusTotal results ──────────────────────────────────────────
-        # Parse the JSON output from check_virustotal.py to read numeric
-        # detection counts rather than doing naive string matching.
-        # Naive "malicious" in output would fire on clean JSON like:
-        #   {"status":"clean","malicious":0} — the key name matches even at 0.
+        # Parse JSON counts (not naive string match) to avoid false positives
+        # on the key name "malicious" appearing in clean {"malicious": 0} output.
         vt_malicious, vt_suspicious = self._parse_vt_counts(result.virustotal_output)
 
         if vt_malicious > 0:
+            reason = self._explain(
+                package_name=package_name,
+                package_manager=package_manager,
+                vt_malicious=vt_malicious,
+                vt_raw_output=result.virustotal_output,
+            )
             return VerificationResult(
                 is_safe=False,
                 package_name=package_name,
                 package_manager=package_manager,
                 risk_level=RiskLevel.MALICIOUS,
-                reason=(
-                    f"Package '{package_name}' was flagged by VirusTotal "
-                    f"({vt_malicious} malicious detection(s))."
-                ),
+                reason=reason,
                 confidence=0.85,
                 metadata=metadata,
             )
 
         if vt_suspicious > 0:
+            reason = self._explain(
+                package_name=package_name,
+                package_manager=package_manager,
+                vt_suspicious=vt_suspicious,
+                vt_raw_output=result.virustotal_output,
+            )
             return VerificationResult(
                 is_safe=False,
                 package_name=package_name,
                 package_manager=package_manager,
                 risk_level=RiskLevel.SUSPICIOUS,
-                reason=(
-                    f"Package '{package_name}' raised suspicion during "
-                    f"VirusTotal analysis ({vt_suspicious} suspicious detection(s))."
-                ),
+                reason=reason,
                 confidence=0.70,
                 metadata=metadata,
             )

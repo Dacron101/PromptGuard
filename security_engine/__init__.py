@@ -16,6 +16,7 @@ from .basic_verifier import BasicVerifier
 from .checker import SecurityChecker
 from .deep_scan_verifier import DeepScanVerifier
 from .firecracker_sandbox import FirecrackerSandbox
+from .gemini_explainer import GeminiExplainer
 
 __all__ = [
     "PackageVerifier",
@@ -25,4 +26,5 @@ __all__ = [
     "SecurityChecker",
     "DeepScanVerifier",
     "FirecrackerSandbox",
+    "GeminiExplainer",
 ]

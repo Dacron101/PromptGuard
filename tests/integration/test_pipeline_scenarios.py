@@ -1,5 +1,5 @@
 """
-tests/integration/pipeline_scenarios.py
+tests/integration/test_pipeline_scenarios.py
 
 Realistic end-to-end pipeline test scenarios for PromptGate.
 ─────────────────────────────────────────────────────────────
@@ -10,16 +10,17 @@ These tests exercise the full stack:
         → SecurityChecker   (strategy chain)
         → BasicVerifier     (allowlist + heuristics)
         → DeepScanVerifier  (Firecracker mock)
+        → GeminiExplainer   (mocked — no real API call)
         → VerificationResult (verdict)
 
-No real Firecracker VM or network is needed. FirecrackerSandbox is mocked
-at the boundary so the rest of the pipeline runs for real.
+No real Firecracker VM, VirusTotal, or Gemini API call is needed.
+All external boundaries are mocked.
 
 Run with:
-    python -m pytest tests/integration/pipeline_scenarios.py -v
+    python -m pytest tests/integration/test_pipeline_scenarios.py -v
 
-Or run a single scenario:
-    python tests/integration/pipeline_scenarios.py
+Or run the visual demo:
+    python tests/integration/test_pipeline_scenarios.py
 """
 
 import os
@@ -57,73 +58,80 @@ def _make_deep_scan_verifier(sandbox_result: SandboxResult) -> DeepScanVerifier:
     return verifier, mock_instance
 
 
+_GEMINI_FAKE_RESPONSE = (
+    "The installation of '{pkg}' via {mgr} was blocked because VirusTotal "
+    "identified it as malicious. Claude Code has been interrupted to protect your system."
+)
+
+
 def _run_pipeline(
     pty_output: str,
     deep_scan_result: SandboxResult | None = None,
+    gemini_response: str | None = None,
 ) -> list[dict]:
     """
     Simulate the full PromptGate pipeline for a chunk of PTY output.
 
     Args:
-        pty_output        : Raw text as it would arrive from Claude Code's PTY.
-        deep_scan_result  : If provided, a DeepScanVerifier backed by this
-                            mocked sandbox result is added as fallback.
+        pty_output       : Raw text as it would arrive from Claude Code's PTY.
+        deep_scan_result : If provided, a mocked FirecrackerSandbox result is
+                           used as the DeepScanVerifier fallback.
+        gemini_response  : If provided, GeminiExplainer._call_api is mocked to
+                           return this string instead of hitting the real API.
+                           Defaults to a canned response so tests never make
+                           real network calls.
 
     Returns:
         List of result dicts, one per detected package:
-            {
-                "manager":   str,
-                "package":   str,
-                "is_safe":   bool,
-                "risk":      str,
-                "reason":    str,
-                "verifier":  str,   # which verifier produced the verdict
-            }
+            {"manager", "package", "is_safe", "risk", "reason", "metadata"}
     """
     detector = CommandDetector()
     detected = detector.detect(pty_output)
-
     if not detected:
         return []
 
+    # Always mock the Gemini API to prevent accidental real calls during tests
+    fake_gemini_text = gemini_response or _GEMINI_FAKE_RESPONSE
+
+    def _fake_call_api(self, prompt):  # noqa: ARG001
+        return fake_gemini_text
+
     if deep_scan_result is not None:
-        # Patch FirecrackerSandbox at the class level for this call
         mock_sb = MagicMock()
         mock_sb.run_install_test.return_value = deep_scan_result
         mock_sb.__enter__ = MagicMock(return_value=mock_sb)
         mock_sb.__exit__ = MagicMock(return_value=False)
 
-        with patch("security_engine.deep_scan_verifier.FirecrackerSandbox", return_value=mock_sb):
-            fallback = DeepScanVerifier(virustotal_key="test-vt-key")
+        with patch("security_engine.deep_scan_verifier.FirecrackerSandbox", return_value=mock_sb), \
+             patch("security_engine.gemini_explainer.GeminiExplainer._call_api", _fake_call_api):
+            fallback = DeepScanVerifier(
+                virustotal_key="test-vt-key",
+                gemini_api_key="test-gemini-key",
+            )
             checker = SecurityChecker(
                 primary_verifier=BasicVerifier(),
                 fallback_verifier=fallback,
             )
-            results = []
-            for cmd in detected:
-                r = checker.check(cmd.package_name, cmd.manager)
-                results.append({
-                    "manager":  cmd.manager,
-                    "package":  cmd.package_name,
-                    "is_safe":  r.is_safe,
-                    "risk":     r.risk_level.value,
-                    "reason":   r.reason,
-                    "metadata": r.metadata,
-                })
+            results = _collect(checker, detected)
     else:
         checker = SecurityChecker(primary_verifier=BasicVerifier())
-        results = []
-        for cmd in detected:
-            r = checker.check(cmd.package_name, cmd.manager)
-            results.append({
-                "manager":  cmd.manager,
-                "package":  cmd.package_name,
-                "is_safe":  r.is_safe,
-                "risk":     r.risk_level.value,
-                "reason":   r.reason,
-                "metadata": r.metadata,
-            })
+        results = _collect(checker, detected)
 
+    return results
+
+
+def _collect(checker: SecurityChecker, detected) -> list[dict]:
+    results = []
+    for cmd in detected:
+        r = checker.check(cmd.package_name, cmd.manager)
+        results.append({
+            "manager":  cmd.manager,
+            "package":  cmd.package_name,
+            "is_safe":  r.is_safe,
+            "risk":     r.risk_level.value,
+            "reason":   r.reason,
+            "metadata": r.metadata,
+        })
     return results
 
 
@@ -291,7 +299,8 @@ class ScenarioUnknownPackageDeepScanMalicious(unittest.TestCase):
         r = results[0]
         self.assertFalse(r["is_safe"])
         self.assertEqual(r["risk"], RiskLevel.MALICIOUS.value)
-        self.assertIn("/root/.ssh/authorized_keys", r["reason"])
+        # reason is now generated by GeminiExplainer — check metadata for the path
+        self.assertIn("/root/.ssh/authorized_keys", r["metadata"].get("suspicious_files", []))
 
     def test_malicious_metadata_contains_suspicious_files(self):
         output = "  $ pip install totally-legit-sdk\n"
@@ -551,6 +560,144 @@ class ScenarioFirecrackerUnavailable(unittest.TestCase):
         # BasicVerifier hits allowlist first — FC is never called for trusted packages
         self.assertTrue(result.is_safe)
         self.assertEqual(result.risk_level, RiskLevel.SAFE)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Scenario 11 — Gemini explainer integration
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ScenarioGeminiExplainer(unittest.TestCase):
+    """
+    Tests for the GeminiExplainer integration inside DeepScanVerifier.
+    The Gemini API is always mocked — no real network calls are made.
+    """
+
+    def _run_with_gemini(self, sandbox_result: SandboxResult, gemini_text: str) -> dict:
+        """Run the pipeline with a controlled Gemini response and return the verdict."""
+        results = _run_pipeline(
+            "  $ pip install evil-pkg\n",
+            deep_scan_result=sandbox_result,
+            gemini_response=gemini_text,
+        )
+        self.assertEqual(len(results), 1)
+        return results[0]
+
+    def test_gemini_explanation_used_as_reason_on_vt_malicious(self):
+        """When VT flags malware, the reason field should contain Gemini's text."""
+        gemini_text = (
+            "The installation of 'evil-pkg' via pip was blocked because "
+            "VirusTotal identified it as Trojan.Gen.2 (8/72 engines). "
+            "Claude Code has been interrupted to protect your system."
+        )
+        result = self._run_with_gemini(
+            SandboxResult(
+                install_exit_code=0,
+                suspicious_files=[],
+                virustotal_output='{"status":"malicious","malicious":8,"suspicious":0}',
+                is_suspicious=True,
+            ),
+            gemini_text,
+        )
+        self.assertFalse(result["is_safe"])
+        self.assertEqual(result["risk"], RiskLevel.MALICIOUS.value)
+        self.assertEqual(result["reason"], gemini_text)
+
+    def test_gemini_explanation_used_on_suspicious_file_write(self):
+        """When sandbox finds suspicious files, Gemini should explain the block."""
+        gemini_text = (
+            "The installation of 'evil-pkg' via pip was blocked because "
+            "it wrote to /root/.ssh/authorized_keys — a credential-hijacking attempt. "
+            "Claude Code has been interrupted to protect your system."
+        )
+        result = self._run_with_gemini(
+            SandboxResult(
+                install_exit_code=0,
+                suspicious_files=["/root/.ssh/authorized_keys"],
+                virustotal_output="",
+                is_suspicious=True,
+            ),
+            gemini_text,
+        )
+        self.assertFalse(result["is_safe"])
+        self.assertEqual(result["risk"], RiskLevel.MALICIOUS.value)
+        self.assertEqual(result["reason"], gemini_text)
+
+    def test_fallback_used_when_no_gemini_key(self):
+        """
+        When gemini_api_key is None, DeepScanVerifier should use the static
+        fallback template — reason must still be a useful non-empty string.
+        """
+        mock_sb = MagicMock()
+        mock_sb.run_install_test.return_value = SandboxResult(
+            install_exit_code=0,
+            suspicious_files=[],
+            virustotal_output='{"status":"malicious","malicious":3,"suspicious":0}',
+            is_suspicious=True,
+        )
+        mock_sb.__enter__ = MagicMock(return_value=mock_sb)
+        mock_sb.__exit__ = MagicMock(return_value=False)
+
+        with patch("security_engine.deep_scan_verifier.FirecrackerSandbox", return_value=mock_sb):
+            # No gemini_api_key → explainer is None → static fallback
+            fallback = DeepScanVerifier(
+                virustotal_key="test-vt-key",
+                gemini_api_key=None,
+            )
+            checker = SecurityChecker(
+                primary_verifier=BasicVerifier(),
+                fallback_verifier=fallback,
+            )
+            result = checker.check("evil-pkg", "pip")
+
+        self.assertFalse(result.is_safe)
+        self.assertIn("blocked because", result.reason)
+        self.assertIn("Claude Code has been interrupted", result.reason)
+
+    def test_gemini_api_failure_falls_back_to_template(self):
+        """
+        If the Gemini API raises an exception (network down, quota exceeded),
+        GeminiExplainer.explain() must return the fallback string — never raise.
+        """
+        from security_engine.gemini_explainer import GeminiExplainer
+
+        explainer = GeminiExplainer(api_key="bad-key")
+
+        with patch.object(GeminiExplainer, "_call_api", side_effect=Exception("503 quota")):
+            result = explainer.explain(
+                package_name="evil-pkg",
+                package_manager="pip",
+                vt_malicious=5,
+            )
+
+        self.assertIn("blocked because", result)
+        self.assertIn("Claude Code has been interrupted", result)
+        # Must NOT raise and must NOT be empty
+        self.assertTrue(len(result) > 20)
+
+    def test_gemini_called_with_correct_package_info(self):
+        """_call_api should receive a prompt that mentions the package name."""
+        from security_engine.gemini_explainer import GeminiExplainer
+
+        captured_prompts = []
+
+        def _capture(self, prompt):
+            captured_prompts.append(prompt)
+            return "Blocked. Claude Code has been interrupted to protect your system."
+
+        explainer = GeminiExplainer(api_key="test-key")
+        with patch.object(GeminiExplainer, "_call_api", _capture):
+            explainer.explain(
+                package_name="suspicious-sdk",
+                package_manager="npm",
+                vt_malicious=4,
+                vt_suspicious=1,
+            )
+
+        self.assertEqual(len(captured_prompts), 1)
+        prompt = captured_prompts[0]
+        self.assertIn("suspicious-sdk", prompt)
+        self.assertIn("npm", prompt)
+        self.assertIn("4 malicious", prompt)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -196,12 +196,19 @@ def build_security_checker(args: argparse.Namespace) -> SecurityChecker:
             "--deep-scan enabled: DeepScanVerifier (Firecracker) will be "
             "used as fallback for unknown packages."
         )
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_key:
+            logging.getLogger(__name__).warning(
+                "GEMINI_API_KEY not set — threat explanations will use "
+                "the built-in fallback template instead of Gemini."
+            )
         fallback = DeepScanVerifier(
             kernel_path=args.kernel_path,
             rootfs_path=args.rootfs_path,
             vm_ip=args.vm_ip,
             ssh_key_path=args.ssh_key_path,
             virustotal_key=os.getenv("VT_API_KEY"),
+            gemini_api_key=gemini_key,
             timeout_seconds=120,
         )
 
