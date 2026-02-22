@@ -1,128 +1,141 @@
-<<<<<<< HEAD
-# PromptGate
-=======
 # PromptGuard
->>>>>>> b6f525fb359db8c4dec161f582045d943f20dc60
 
-A security middleware wrapper for [Claude Code](https://docs.anthropic.com/claude/claude-code) that intercepts package installation commands in real time, verifies them against a trusted allowlist and heuristic rules, and blocks potentially malicious or hallucinated packages before they can execute.
-
----
-
-## How It Works
-
-```
-User Terminal
-     │
-     ▼
-┌─────────────────────────────────────────────────────┐
-│              promptgate.py                         │
-│  ┌────────────────────────────────────────────────┐ │
-│  │           TTYWrapper (PTY MITM)                │ │
-│  │  ┌──────────────┐   ┌──────────────────────┐  │ │
-│  │  │CommandDetector│──▶│  SecurityChecker     │  │ │
-│  │  │  (regex FSM)  │   │  (Strategy Chain)    │  │ │
-│  │  └──────────────┘   └──────────────────────┘  │ │
-│  │          │                    │                │ │
-│  │  ┌───────▼────────────────────▼──────────────┐ │ │
-│  │  │  BasicVerifier  │  DeepScanVerifier       │ │ │
-│  │  │  (allowlist +   │  (Firecracker microVM + │ │ │
-│  │  │   heuristics)   │   VirusTotal scan)      │ │ │
-│  │  └───────────────────────────────────────────┘ │ │
-│  │                         │                      │ │
-│  │              ┌──────────▼──────────┐           │ │
-│  │              │ FirecrackerSandbox  │           │ │
-│  │              │ (isolated microVM)  │           │ │
-│  │              └─────────────────────┘           │ │
-│  └────────────────────────────────────────────────┘ │
-│                        │                            │
-│            ┌───────────▼───────────┐                │
-│            │    claude (process)   │                │
-│            └───────────────────────┘                │
-└─────────────────────────────────────────────────────┘
-```
-
-1. The user runs `python promptgate.py` instead of `claude`.
-2. PromptGate forks a PTY and launches Claude Code inside it.
-3. All I/O flows through the `TTYWrapper` proxy transparently.
-4. When a line matching an install command (e.g. `pip install foo`) is detected, `CommandDetector` fires.
-5. `SecurityChecker` consults the verifier chain (currently `BasicVerifier`).
-6. If the package is **safe** → session continues uninterrupted.
-7. If the package is **unsafe/unknown** → Claude Code receives `SIGINT`, a warning is printed, and the install is aborted.
+**Real-time security middleware for Claude Code** — intercepts malicious package installs, catches prompt injection attacks before they execute, and tells you exactly where in the context the threat came from.
 
 ---
 
-## Project Structure
+## The Problem
+
+AI coding agents like Claude Code are powerful — and that's exactly what makes them dangerous. A single malicious instruction buried in a README, a web page Claude scraped, or a tool output can silently poison the agent's context and cause it to install a backdoored package, exfiltrate credentials, or modify system files. By the time you notice, it's already done.
+
+PromptGuard sits between you and Claude Code and stops this.
+
+---
+
+## What It Does
 
 ```
-PromptGate/
-├── promptgate.py               # Entry point — run this
-├── requirements.txt
-│
-├── security_engine/             # Pluggable verification layer
-│   ├── __init__.py
-│   ├── base.py                  # PackageVerifier ABC + VerificationResult
-│   ├── basic_verifier.py        # Offline allowlist + heuristic verifier
-│   ├── deep_scan_verifier.py    # Firecracker microVM sandbox verifier
-│   ├── firecracker_sandbox.py   # Firecracker VM lifecycle manager
-│   └── checker.py               # SecurityChecker (Strategy orchestrator)
-│
-├── interceptor/                 # Runtime interception layer
-│   ├── __init__.py
-│   ├── command_detector.py      # Regex-based install command parser
-│   └── tty_wrapper.py           # PTY Man-in-the-Middle proxy
-│
-└── scripts/                     # Standalone utility scripts
-    ├── firecracker.py           # Original Firecracker setup reference
-    └── check_virustotal         # VirusTotal file scanner
+Your Terminal
+      │
+      ▼
+┌─────────────────────────────────────────────────────────┐
+│                      PromptGuard                        │
+│                                                         │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │           TTYWrapper  (PTY Man-in-the-Middle)     │  │
+│  │                                                   │  │
+│  │   ┌─────────────────┐    ┌──────────────────────┐ │  │
+│  │   │ CommandDetector │───▶│  SecurityChecker    │ │  │
+│  │   │ (regex, 6 pkg   │    │  (Strategy Chain)    │ │  │
+│  │   │  managers)      │    └──────────┬───────────┘ │  │
+│  │   └─────────────────┘              │              │  │
+│  │                          ┌─────────┴──────────┐   │  │
+│  │                          │                    │   │  │
+│  │              ┌───────────┴───────┐  ┌─────────┴──────────────┐
+│  │              │  BasicVerifier    │  │   DeepScanVerifier     │
+│  │              │  allowlist +      │  │   Firecracker microVM  │
+│  │              │  typosquatting    │  │   + VirusTotal API v3  │
+│  │              └───────────────────┘  └────────────────────────┘
+│  │                                                   │  │
+│  │   ┌───────────────────────────────────────────┐   │  │
+│  │   │            InjectionLocator               │   │  │
+│  │   │  ┌──────────────────────┬──────────────┐  │   │  │
+│  │   │  │ Two-phase binary     │  Embedding   │  │   │  │
+│  │   │  │ search over context  │  cosine-sim  │  │   │  │
+│  │   │  │ (re-prompts Claude)  │  (O(1) calls)│  │   │  │
+│  │   │  └──────────────────────┴──────────────┘  │   │  │
+│  │   └───────────────────────────────────────────┘   │  │
+│  │                                                   │  │
+│  │   ┌───────────────────────────────────────────┐   │  │
+│  │   │  GeminiExplainer  (2.0 flash-lite)        │   │  │
+│  │   │  plain-English verdict on every block     │   │  │
+│  │   └───────────────────────────────────────────┘   │  │
+│  └───────────────────────────────────────────────────┘  │
+│                          │                              │
+│             ┌────────────▼───────────┐                  │
+│             │    claude  (process)   │                  │
+│             └────────────────────────┘                  │
+└─────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Three Layers of Defence
+
+### Layer 1 — Package Verification
+
+Every `npm install`, `pip install`, `cargo add` (and more) is intercepted the moment it appears in Claude Code's output stream. The package name is checked against a two-stage verifier chain before a single byte hits the network:
+
+- **BasicVerifier** — instant, offline. Allowlist of trusted packages + heuristic rules for typosquatting (Levenshtein similarity against popular packages), suspicious keywords, and abnormal naming patterns.
+- **DeepScanVerifier** — triggered for unknowns. Spins up an isolated **Firecracker microVM** (hardware-level KVM isolation), installs the package inside it, monitors for suspicious filesystem mutations (`~/.ssh`, cron, `/etc/ld.so.preload`, …), then runs a **VirusTotal API v3** scan on the installed files. The VM is destroyed when done — nothing touches the host.
+
+If a threat is detected, Claude Code receives `SIGINT` and the install is aborted. A Gemini-powered explanation tells you exactly why.
+
+### Layer 2 — Prompt Injection Detection
+
+When a package install is blocked, PromptGuard doesn't just stop there. It launches the **InjectionLocator** to answer the harder question: *where in the context did this instruction come from?*
+
+Two complementary strategies run in parallel:
+
+**Binary-search locator** — re-prompts Claude with progressively smaller slices of the conversation history using a two-phase shrink algorithm (trim from end → trim from start). When Claude stops reproducing the malicious command, the boundary has been found. Precise to a single context entry.
+
+**Embedding locator** — encodes every sentence in the context window and the blocked command into vector space, then ranks chunks by cosine similarity. Finds the injection in O(1) API calls instead of O(log N). Supports OpenAI embeddings (when `OPENAI_API_KEY` is set) or a fully local model — no external calls required.
+
+Both locators return an **InjectionReport** with:
+- The exact text segment that caused the malicious behaviour
+- The source: which file was read, which URL was fetched, which user turn contained it
+- A confidence score
+- Highlighted output showing the malicious context in red
+
+### Layer 3 — AI-Powered Threat Explanation
+
+Every block triggers a call to **Gemini 2.0 Flash Lite** (the cheapest production Gemini model at ~$0.0001 per call) to generate a concise, human-readable explanation:
+
+> *"The installation of 'totally-legit-sdk' via pip was blocked because VirusTotal identified it as a credential-stealer (7/72 engines flagged it, including Trojan.Gen.2). Claude Code has been interrupted to protect your system."*
+
+If the Gemini API is unavailable, a deterministic fallback template is used — the block always happens regardless.
 
 ---
 
 ## Installation
 
 ```bash
-# Clone the repo
 git clone <repo-url>
-cd CodeGate
-
-# Install dependencies
+cd PromptGuard
 pip install -r requirements.txt
-
-# Make the entry point executable (optional)
-chmod +x promptgate.py
 ```
 
-**Requirements:** Python 3.10+, `pexpect`, `colorama`, Claude Code installed and on `PATH`.
+**Requirements:** Python 3.10+, Claude Code on `PATH`.
+
+Copy `.env.example` to `.env` and fill in your API keys:
+
+```bash
+cp .env.example .env
+```
 
 ---
 
 ## Usage
 
 ```bash
-# Basic usage — replaces running 'claude' directly
-python promptgate.py
-
-# Use a custom path to the claude binary
-python promptgate.py --claude-cmd /usr/local/bin/claude
-
-# Allow unknown packages (warn instead of block)
-python promptgate.py --allow-unknown
+# Drop-in replacement for 'claude'
+python claudeguard.py
 
 # Enable Firecracker deep scan for unknown packages
-python promptgate.py --deep-scan
+python claudeguard.py --deep-scan
 
-# Deep scan with custom Firecracker config
-python promptgate.py --deep-scan \
+# Deep scan with explicit paths
+python claudeguard.py --deep-scan \
     --kernel-path /opt/firecracker/vmlinux \
     --rootfs-path /opt/firecracker/rootfs.ext4 \
     --vm-ip 172.16.0.2 \
     --ssh-key-path ~/.ssh/firecracker_id_rsa
 
-# Verbose debug output
-python promptgate.py --log-level DEBUG
+# Warn on unknown packages instead of blocking
+python claudeguard.py --allow-unknown
 
-# Show help
-python promptgate.py --help
+# Debug logging
+python claudeguard.py --log-level DEBUG
 ```
 
 ---
@@ -130,80 +143,75 @@ python promptgate.py --help
 ## Supported Package Managers
 
 | Manager | Intercepted Commands |
-|---------|---------------------|
+|---------|----------------------|
+| pip     | `pip install`, `pip3 install`, `python -m pip install` |
 | npm     | `npm install`, `npm i`, `npm add` |
 | yarn    | `yarn add`, `yarn global add` |
-| pip     | `pip install`, `pip3 install`, `python -m pip install` |
-| brew    | `brew install` |
 | cargo   | `cargo add` |
 | go      | `go get`, `go install` |
+| brew    | `brew install` |
 
 ---
 
-## Architecture: Strategy Pattern
+## Configuration
 
-`SecurityChecker` owns a **primary** and optional **fallback** `PackageVerifier`. Adding a new verification backend requires only:
+All keys are read from environment variables (set in `.env`):
 
-1. Subclass `PackageVerifier` and implement `verify()`.
-2. Pass an instance as `fallback_verifier` to `SecurityChecker`.
+| Variable | Purpose |
+|----------|---------|
+| `GEMINI_API_KEY` | Gemini 2.0 Flash Lite — threat explanations. Get one at [aistudio.google.com](https://aistudio.google.com/app/apikey). |
+| `VT_API_KEY` | VirusTotal API v3 — in-VM file scanning. |
+| `OPENAI_API_KEY` | OpenAI embeddings for the embedding-based injection locator. Falls back to a local model if unset. |
+| `FC_KERNEL_PATH` | Path to the Firecracker vmlinux kernel image. |
+| `FC_ROOTFS_PATH` | Path to the rootfs.ext4 image. |
+| `FC_VM_IP` | VM IP address for SSH access (default: `172.16.0.2`). |
+| `FC_HOST_IP` | Host-side TAP interface IP (default: `172.16.0.1`). |
+| `FC_TAP_DEVICE` | TAP device name (default: `tap0`). |
+| `FC_SSH_KEY_PATH` | SSH private key for `root@VM`. |
 
-```python
-# Usage with Firecracker deep scan:
-from security_engine.deep_scan_verifier import DeepScanVerifier
-from security_engine.checker import SecurityChecker
+---
 
-checker = SecurityChecker(
-    primary_verifier=BasicVerifier(),
-    fallback_verifier=DeepScanVerifier(
-        kernel_path="./vmlinux",
-        rootfs_path="./rootfs.ext4",
-        vm_ip="172.16.0.2",
-        virustotal_key="your_key",
-    ),
-)
+## Project Structure
+
 ```
-
----
-
-## Firecracker Deep Scan
-
-When `--deep-scan` is enabled, unknown packages (not in the BasicVerifier allowlist) are escalated to the `DeepScanVerifier`, which:
-
-1. **Spins up a Firecracker microVM** — an isolated virtual machine with its own kernel, providing hardware-level isolation via KVM.
-2. **Installs the package** inside the VM using the appropriate package manager.
-3. **Monitors for suspicious behaviour** — checks for writes to sensitive paths (`~/.ssh`, `/etc/cron.d`, etc.).
-4. **Runs VirusTotal scans** on newly installed files.
-5. **Returns a verdict** — `SAFE`, `SUSPICIOUS`, or `MALICIOUS`.
-6. **Tears down the VM** — no artefacts persist on the host.
-
-### Prerequisites
-
-- Linux host with `/dev/kvm` access
-- [`firecracker`](https://github.com/firecracker-microvm/firecracker) binary on PATH
-- A `vmlinux` kernel image and `rootfs.ext4` with package managers + Python 3 + `check_virustotal.py` pre-deployed
-- SSH key configured for `root@` (key-based, no password)
-
----
-
-## Roadmap
-
-- [x] PTY-based Man-in-the-Middle proxy
-- [x] Regex detection for 6 package managers
-- [x] Offline allowlist + heuristic verifier (`BasicVerifier`)
-- [x] Strategy Pattern verifier chain (`SecurityChecker`)
-- [x] `DeepScanVerifier` — Firecracker microVM sandbox
-- [x] `DeepScanVerifier` — VirusTotal file-hash submission (in-VM)
-- [ ] `DeepScanVerifier` — OSV/Snyk advisory lookup
-- [ ] `DeepScanVerifier` — ML-based typosquatting detector
-- [ ] PATH shim injection (proactive interception before execution)
-- [ ] eBPF/audit-log kernel-level interception mode
-- [ ] Web dashboard for audit logs
-- [ ] Allowlist sync from PyPA/npm advisory databases
+PromptGuard/
+├── claudeguard.py              # Entry point
+├── requirements.txt
+├── .env.example
+│
+├── security_engine/            # Package verification
+│   ├── base.py                 # PackageVerifier ABC + VerificationResult
+│   ├── basic_verifier.py       # Offline allowlist + heuristic checks
+│   ├── deep_scan_verifier.py   # Firecracker + VirusTotal verifier
+│   ├── firecracker_sandbox.py  # VM lifecycle manager
+│   ├── gemini_explainer.py     # Gemini-powered threat explanations
+│   └── checker.py              # SecurityChecker (Strategy orchestrator)
+│
+├── interceptor/                # Runtime interception
+│   ├── command_detector.py     # Regex-based install command parser
+│   └── tty_wrapper.py          # PTY Man-in-the-Middle proxy
+│
+├── injection_locator/          # Prompt injection attribution
+│   ├── injection_locator.py    # Two-phase binary-search locator
+│   ├── embedding_locator.py    # Cosine-similarity embedding locator
+│   ├── source_mapper.py        # Maps context entries to source files/URLs
+│   └── models.py               # ContextEntry, InjectionReport dataclasses
+│
+├── scripts/
+│   └── check_virustotal.py     # VirusTotal scanner deployed inside the VM
+│
+└── tests/
+    ├── test_firecracker_sandbox.py
+    ├── test_injection_locator.py
+    └── integration/
+        └── test_pipeline_scenarios.py  # 55 end-to-end scenarios
+```
 
 ---
 
 ## Security Notes
 
-- PromptGate is a **defence-in-depth** layer, not a complete sandbox. A sufficiently sophisticated threat (e.g., a package that defers its payload to post-install hooks) may still cause harm. The `DeepScanVerifier` roadmap addresses this.
-- The PTY interception is **reactive** — it fires when the command appears in Claude Code's output stream, which is typically just before execution. The PATH shim approach (roadmap item) provides truly **proactive** interception.
-- Always review the `security_engine/basic_verifier.py` allowlist to ensure it matches your organisation's approved packages.
+- PromptGuard is a **defence-in-depth** layer. The BasicVerifier allowlist should be tuned to your organisation's approved packages.
+- The PTY interception is **reactive** — it fires when the install command appears in Claude Code's output stream, typically just before execution.
+- The Firecracker microVM provides **hardware-level KVM isolation**. Even a root-privileged package cannot escape the VM boundary to affect the host.
+- The InjectionLocator re-prompts Claude using its `--print` headless mode. Each re-prompt counts against your Anthropic usage. The binary-search approach uses at most `2 × log₂(N)` calls; the embedding approach uses exactly one.
