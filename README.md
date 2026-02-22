@@ -1,4 +1,4 @@
-# ClaudeGuard
+# PromptGate
 
 A security middleware wrapper for [Claude Code](https://docs.anthropic.com/claude/claude-code) that intercepts package installation commands in real time, verifies them against a trusted allowlist and heuristic rules, and blocks potentially malicious or hallucinated packages before they can execute.
 
@@ -11,7 +11,7 @@ User Terminal
      │
      ▼
 ┌─────────────────────────────────────────────────────┐
-│              claudeguard.py                         │
+│              promptgate.py                         │
 │  ┌────────────────────────────────────────────────┐ │
 │  │           TTYWrapper (PTY MITM)                │ │
 │  │  ┌──────────────┐   ┌──────────────────────┐  │ │
@@ -37,8 +37,8 @@ User Terminal
 └─────────────────────────────────────────────────────┘
 ```
 
-1. The user runs `python claudeguard.py` instead of `claude`.
-2. ClaudeGuard forks a PTY and launches Claude Code inside it.
+1. The user runs `python promptgate.py` instead of `claude`.
+2. PromptGate forks a PTY and launches Claude Code inside it.
 3. All I/O flows through the `TTYWrapper` proxy transparently.
 4. When a line matching an install command (e.g. `pip install foo`) is detected, `CommandDetector` fires.
 5. `SecurityChecker` consults the verifier chain (currently `BasicVerifier`).
@@ -50,8 +50,8 @@ User Terminal
 ## Project Structure
 
 ```
-ClaudeGuard/
-├── claudeguard.py               # Entry point — run this
+PromptGate/
+├── promptgate.py               # Entry point — run this
 ├── requirements.txt
 │
 ├── security_engine/             # Pluggable verification layer
@@ -85,7 +85,7 @@ cd CodeGate
 pip install -r requirements.txt
 
 # Make the entry point executable (optional)
-chmod +x claudeguard.py
+chmod +x promptgate.py
 ```
 
 **Requirements:** Python 3.10+, `pexpect`, `colorama`, Claude Code installed and on `PATH`.
@@ -96,29 +96,29 @@ chmod +x claudeguard.py
 
 ```bash
 # Basic usage — replaces running 'claude' directly
-python claudeguard.py
+python promptgate.py
 
 # Use a custom path to the claude binary
-python claudeguard.py --claude-cmd /usr/local/bin/claude
+python promptgate.py --claude-cmd /usr/local/bin/claude
 
 # Allow unknown packages (warn instead of block)
-python claudeguard.py --allow-unknown
+python promptgate.py --allow-unknown
 
 # Enable Firecracker deep scan for unknown packages
-python claudeguard.py --deep-scan
+python promptgate.py --deep-scan
 
 # Deep scan with custom Firecracker config
-python claudeguard.py --deep-scan \
+python promptgate.py --deep-scan \
     --kernel-path /opt/firecracker/vmlinux \
     --rootfs-path /opt/firecracker/rootfs.ext4 \
     --vm-ip 172.16.0.2 \
     --ssh-key-path ~/.ssh/firecracker_id_rsa
 
 # Verbose debug output
-python claudeguard.py --log-level DEBUG
+python promptgate.py --log-level DEBUG
 
 # Show help
-python claudeguard.py --help
+python promptgate.py --help
 ```
 
 ---
@@ -200,6 +200,6 @@ When `--deep-scan` is enabled, unknown packages (not in the BasicVerifier allowl
 
 ## Security Notes
 
-- ClaudeGuard is a **defence-in-depth** layer, not a complete sandbox. A sufficiently sophisticated threat (e.g., a package that defers its payload to post-install hooks) may still cause harm. The `DeepScanVerifier` roadmap addresses this.
+- PromptGate is a **defence-in-depth** layer, not a complete sandbox. A sufficiently sophisticated threat (e.g., a package that defers its payload to post-install hooks) may still cause harm. The `DeepScanVerifier` roadmap addresses this.
 - The PTY interception is **reactive** — it fires when the command appears in Claude Code's output stream, which is typically just before execution. The PATH shim approach (roadmap item) provides truly **proactive** interception.
 - Always review the `security_engine/basic_verifier.py` allowlist to ensure it matches your organisation's approved packages.

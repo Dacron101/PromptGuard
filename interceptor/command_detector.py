@@ -193,6 +193,17 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m|\x1b\[[0-9;]*[A-Za-z]")
 # Flag tokens (for parsing out of package lists)
 _FLAG_TOKEN = re.compile(r"^-{1,2}\S+$")
 
+# Shell redirection patterns that should be stripped before package parsing.
+# Matches: 2>&1, 2>/dev/null, >/dev/null, >output.log, | grep foo, etc.
+_SHELL_REDIRECT = re.compile(
+    r"(?:"
+    r"\d*>+&?\d*"
+    r"|\d*>+[^\s]*"
+    r"|\|[^\n]*"
+    r"|<[^\n]*"
+    r")"
+)
+
 # Version specifier attached to a package name
 _VERSION_SPECIFIER = re.compile(
     r"(?:@[^@\s]+|[=<>!~]{1,2}[^\s]+)$"
@@ -274,8 +285,13 @@ class CommandDetector:
 
     @staticmethod
     def _split_packages(packages_raw: str) -> List[str]:
-        """Split a whitespace-separated package list into individual tokens."""
-        return [p for p in packages_raw.split() if p]
+        """Split a whitespace-separated package list into individual tokens.
+
+        Strips shell redirections (e.g. ``2>&1``, ``>/dev/null``) first so
+        they are never mistaken for package names.
+        """
+        cleaned = _SHELL_REDIRECT.sub("", packages_raw).strip()
+        return [p for p in cleaned.split() if p]
 
     @staticmethod
     def _split_version(token: str, manager: str) -> tuple[str, Optional[str]]:

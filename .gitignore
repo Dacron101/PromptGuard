@@ -1,4 +1,5 @@
 node_modules/
+promptgate/
 kernels/
 squashfs-root/
 ubuntu-*.ext4
@@ -7,3 +8,7 @@ firebase.json
 *-service-account.json
 *serviceAccount*.json
 firebase-adminsdk*.json
+
+
+*.pdf
+*.odt

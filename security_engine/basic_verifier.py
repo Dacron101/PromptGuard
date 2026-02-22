@@ -122,6 +122,17 @@ SAFE_PACKAGES: Dict[str, FrozenSet[str]] = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Blacklist — known-malicious packages
+# Packages on this list are immediately blocked as MALICIOUS without any
+# further checks (no VT scan, no deep scan). This is the fastest path to
+# blocking and feeds directly into the injection locator pipeline.
+# ─────────────────────────────────────────────────────────────────────────────
+BLACKLISTED_PACKAGES: FrozenSet[str] = frozenset({
+    "cursed",
+})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Suspicious-pattern heuristics
 # Each tuple is (compiled_regex, human-readable reason).
 # Patterns are evaluated in order; the first match wins.
@@ -164,6 +175,7 @@ class BasicVerifier(PackageVerifier):
     Offline, zero-dependency verifier using an allowlist + heuristic patterns.
 
     Decision logic (in order):
+      0. If the package is on the blacklist → MALICIOUS (blocked immediately).
       1. If the package name is in the allowlist for its ecosystem → SAFE.
       2. If the name matches any suspicious pattern → SUSPICIOUS (blocked).
       3. Otherwise → UNKNOWN (conservative: blocked with informational message).
@@ -189,6 +201,22 @@ class BasicVerifier(PackageVerifier):
         """
         normalised_name = package_name.strip().lower()
         normalised_manager = package_manager.strip().lower()
+
+        # ── Step 0: Blacklist check ──────────────────────────────────────────
+        # Known-malicious packages are blocked immediately as MALICIOUS.
+        if normalised_name in BLACKLISTED_PACKAGES:
+            return VerificationResult(
+                is_safe=False,
+                package_name=package_name,
+                package_manager=package_manager,
+                risk_level=RiskLevel.MALICIOUS,
+                reason=(
+                    f"Package '{package_name}' is on the PromptGate blacklist. "
+                    f"This package is known to be malicious."
+                ),
+                confidence=0.99,
+                metadata={"blacklisted": True},
+            )
 
         # ── Step 1: Allowlist check ──────────────────────────────────────────
         # For npm/yarn, strip leading scope prefix (@org/pkg → pkg) for the

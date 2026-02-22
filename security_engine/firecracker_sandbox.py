@@ -24,7 +24,7 @@ Firecracker VMs need a TAP network device on the host. Run once per host:
     sudo ip addr add 172.16.0.1/24 dev tap0
     sudo ip link set tap0 up
 
-This sets up the host-side networking that the VM bridges to. ClaudeGuard
+This sets up the host-side networking that the VM bridges to. PromptGate
 does NOT do this automatically because it requires root privileges.
 
 Usage:
@@ -588,7 +588,7 @@ class FirecrackerSandbox:
                 # Make it executable
                 self.run_command("chmod +x /usr/local/bin/check_virustotal.py")
                 logger.info("Deployed check_virustotal.py to VM")
-                print("[ClaudeGuard]   ✓ check_virustotal.py deployed to VM")
+                print("[PromptGate]   ✓ check_virustotal.py deployed to VM")
             else:
                 logger.warning("Failed to SCP check_virustotal.py: %s", result.stderr)
         except subprocess.TimeoutExpired:
@@ -690,17 +690,17 @@ class FirecrackerSandbox:
 
         dl_cmd = download_cmds.get(package_manager.lower())
         if dl_cmd is None:
-            print(f"[ClaudeGuard]   ⚠ Package download not supported for '{package_manager}' — skipping VT scan")
+            print(f"[PromptGate]   ⚠ Package download not supported for '{package_manager}' — skipping VT scan")
             return None
 
         # Create download directory
         self.run_command("mkdir -p /tmp/pkg_download")
 
-        print(f"[ClaudeGuard]   📥 Downloading '{package_name}' package archive...")
+        print(f"[PromptGate]   📥 Downloading '{package_name}' package archive...")
         stdout, stderr, code = self.run_command(dl_cmd)
 
         if code != 0:
-            print(f"[ClaudeGuard]   ⚠ Package download failed (exit {code})")
+            print(f"[PromptGate]   ⚠ Package download failed (exit {code})")
             logger.debug("Download stderr: %s", stderr[:300])
             return None
 
@@ -709,13 +709,13 @@ class FirecrackerSandbox:
             "ls -1 /tmp/pkg_download/ 2>/dev/null | head -5"
         )
         if not find_stdout.strip():
-            print("[ClaudeGuard]   ⚠ No archive file found after download")
+            print("[PromptGate]   ⚠ No archive file found after download")
             return None
 
         # Get the first (and usually only) file
         archive_name = find_stdout.strip().splitlines()[0].strip()
         archive_path = f"/tmp/pkg_download/{archive_name}"
-        print(f"[ClaudeGuard]   ✓ Downloaded: {archive_name}")
+        print(f"[PromptGate]   ✓ Downloaded: {archive_name}")
         return archive_path
 
     def _run_virustotal_scan_file(self, file_path: str, package_name: str) -> str:
@@ -730,11 +730,11 @@ class FirecrackerSandbox:
         on error.
         """
         if not self._virustotal_key:
-            print("[ClaudeGuard]   ⚠ No VT_API_KEY configured — skipping VirusTotal scan")
+            print("[PromptGate]   ⚠ No VT_API_KEY configured — skipping VirusTotal scan")
             return ""
 
         filename = os.path.basename(file_path)
-        print(f"[ClaudeGuard]   🔍 Scanning '{filename}' with VirusTotal...")
+        print(f"[PromptGate]   🔍 Scanning '{filename}' with VirusTotal...")
 
         safe_key = shlex.quote(self._virustotal_key)
         safe_path = shlex.quote(file_path)
@@ -753,16 +753,16 @@ class FirecrackerSandbox:
                 sus = vt_data.get('suspicious', 0)
                 sha = vt_data.get('sha256', 'unknown')[:16]
                 print(
-                    f"[ClaudeGuard]   → VT verdict: status={status} "
+                    f"[PromptGate]   → VT verdict: status={status} "
                     f"malicious={mal} suspicious={sus} sha256={sha}..."
                 )
             except json.JSONDecodeError:
-                print(f"[ClaudeGuard]   → VT raw output: {scan_stdout[:150]}")
+                print(f"[PromptGate]   → VT raw output: {scan_stdout[:150]}")
             return scan_stdout.strip()
         else:
-            print(f"[ClaudeGuard]   → VT returned no output (exit={scan_code})")
+            print(f"[PromptGate]   → VT returned no output (exit={scan_code})")
             if scan_stderr.strip():
-                print(f"[ClaudeGuard]   → stderr: {scan_stderr[:200]}")
+                print(f"[PromptGate]   → stderr: {scan_stderr[:200]}")
             return ""
 
     def _scan_package_py_files(
@@ -803,11 +803,11 @@ class FirecrackerSandbox:
                 f"find {shlex.quote(pkg_path_alt)} -maxdepth 1 -name '*.py' -type f 2>/dev/null"
             )
             if code != 0 or not stdout.strip():
-                print(f"[ClaudeGuard]   ℹ No .py files found in package root directory")
+                print(f"[PromptGate]   ℹ No .py files found in package root directory")
                 return []
 
         py_files = stdout.strip().splitlines()
-        print(f"[ClaudeGuard]   📄 Found {len(py_files)} .py files in package root — scanning with VT...")
+        print(f"[PromptGate]   📄 Found {len(py_files)} .py files in package root — scanning with VT...")
 
         safe_key = shlex.quote(self._virustotal_key)
         results: list[str] = []
@@ -815,7 +815,7 @@ class FirecrackerSandbox:
         for i, filepath in enumerate(py_files[:10], 1):
             filepath = filepath.strip()
             filename = os.path.basename(filepath)
-            print(f"[ClaudeGuard]   [{i}/{min(len(py_files), 10)}] Scanning: {filename}")
+            print(f"[PromptGate]   [{i}/{min(len(py_files), 10)}] Scanning: {filename}")
 
             safe_path = shlex.quote(filepath)
             scan_cmd = (
@@ -832,13 +832,13 @@ class FirecrackerSandbox:
                     mal = vt_data.get('malicious', 0)
                     sus = vt_data.get('suspicious', 0)
                     print(
-                        f"[ClaudeGuard]     → {filename}: status={status} "
+                        f"[PromptGate]     → {filename}: status={status} "
                         f"malicious={mal} suspicious={sus}"
                     )
                 except json.JSONDecodeError:
-                    print(f"[ClaudeGuard]     → {filename}: {scan_stdout[:100]}")
+                    print(f"[PromptGate]     → {filename}: {scan_stdout[:100]}")
             else:
-                print(f"[ClaudeGuard]     → {filename}: no VT output (exit={scan_code})")
+                print(f"[PromptGate]     → {filename}: no VT output (exit={scan_code})")
 
-        print(f"[ClaudeGuard]   ✓ .py file scan complete: {len(results)}/{len(py_files)} files analysed")
+        print(f"[PromptGate]   ✓ .py file scan complete: {len(results)}/{len(py_files)} files analysed")
         return results

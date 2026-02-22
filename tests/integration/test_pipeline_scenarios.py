@@ -1,7 +1,7 @@
 """
 tests/integration/pipeline_scenarios.py
 
-Realistic end-to-end pipeline test scenarios for ClaudeGuard.
+Realistic end-to-end pipeline test scenarios for PromptGate.
 ─────────────────────────────────────────────────────────────
 These tests exercise the full stack:
 
@@ -62,7 +62,7 @@ def _run_pipeline(
     deep_scan_result: SandboxResult | None = None,
 ) -> list[dict]:
     """
-    Simulate the full ClaudeGuard pipeline for a chunk of PTY output.
+    Simulate the full PromptGate pipeline for a chunk of PTY output.
 
     Args:
         pty_output        : Raw text as it would arrive from Claude Code's PTY.
@@ -504,7 +504,7 @@ class ScenarioVersionPinnedInstalls(unittest.TestCase):
 
 class ScenarioFirecrackerUnavailable(unittest.TestCase):
     """
-    The user runs ClaudeGuard on a machine without Firecracker installed, or
+    The user runs PromptGate on a machine without Firecracker installed, or
     the VM fails to boot. The system must degrade gracefully:
       - FileNotFoundError → blocked with UNKNOWN, clear error message
       - RuntimeError      → blocked with UNKNOWN, error surfaced in metadata
@@ -631,7 +631,7 @@ def _print_pipeline_demo():
     ]
 
     print(f"\n{BOLD}{'─'*65}{RESET}")
-    print(f"{BOLD}  ClaudeGuard — Pipeline Integration Demo{RESET}")
+    print(f"{BOLD}  PromptGate — Pipeline Integration Demo{RESET}")
     print(f"{BOLD}{'─'*65}{RESET}\n")
 
     for label, pty_output, deep_scan in demo_cases:

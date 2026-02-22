@@ -1,5 +1,5 @@
 """
-interceptor — ClaudeGuard's runtime I/O interception layer.
+interceptor — PromptGate's runtime I/O interception layer.
 
 Public API:
     TTYWrapper       : PTY Man-in-the-Middle proxy for Claude Code.

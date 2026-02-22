@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-claudeguard.py — ClaudeGuard entry point.
+promptgate.py — PromptGate entry point.
 ──────────────────────────────────────────
 Run this script INSTEAD of running `claude` directly:
 
-    python claudeguard.py [options]
+    python promptgate.py [options]
 
-ClaudeGuard will:
+PromptGate will:
   1. Print a startup banner.
   2. Configure the SecurityChecker with the appropriate verifier chain.
   3. Fork a PTY and launch Claude Code inside it.
@@ -24,13 +24,13 @@ CLI Options
                          IMPLEMENTED — reserved for future use).
   --log-level LEVEL      Python logging level (DEBUG, INFO, WARNING, ERROR).
                          Defaults to WARNING.
-  --version              Print ClaudeGuard version and exit.
+  --version              Print PromptGate version and exit.
   -h / --help            Show this help message and exit.
 
 Exit Codes
 ──────────
   0     Claude Code exited normally.
-  1     ClaudeGuard setup error (e.g., Claude Code binary not found).
+  1     PromptGate setup error (e.g., Claude Code binary not found).
   127   Claude Code binary not found (propagated from child).
   Any other value is the raw exit code of the Claude Code process.
 """
@@ -75,9 +75,9 @@ __version__ = "0.1.0"
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="claudeguard",
+        prog="promptgate",
         description=(
-            "ClaudeGuard — Security wrapper for Claude Code that intercepts "
+            "PromptGate — Security wrapper for Claude Code that intercepts "
             "and verifies package installation commands before they execute."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -141,7 +141,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"ClaudeGuard {__version__}",
+        version=f"PromptGate {__version__}",
+    )
+    parser.add_argument(
+        "--locate-injection",
+        action="store_true",
+        default=True,
+        help=(
+            "When a malicious action is blocked, offer to locate the "
+            "injection source via binary search over conversation context. "
+            "Default: enabled."
+        ),
+    )
+    parser.add_argument(
+        "--no-locate-injection",
+        action="store_false",
+        dest="locate_injection",
+        help="Disable the injection locator prompt.",
+    )
+    parser.add_argument(
+        "--system-prompt",
+        default=None,
+        metavar="PROMPT",
+        help=(
+            "System prompt to pass to Claude Code via --system-prompt. "
+            "Useful for testing prompt injection scenarios."
+        ),
     )
     return parser
 
@@ -188,7 +213,7 @@ def build_security_checker(args: argparse.Namespace) -> SecurityChecker:
 
 def main() -> int:
     """
-    ClaudeGuard entry point.
+    PromptGate entry point.
 
     Returns the exit code to pass to the OS.
     """
@@ -198,7 +223,7 @@ def main() -> int:
     configure_logging(args.log_level)
     logger = logging.getLogger(__name__)
 
-    logger.info("ClaudeGuard %s starting", __version__)
+    logger.info("PromptGate %s starting", __version__)
     logger.info("Config: claude_cmd=%s allow_unknown=%s deep_scan=%s",
                 args.claude_cmd, args.allow_unknown, args.deep_scan)
 
@@ -208,7 +233,7 @@ def main() -> int:
         # Don't hard-error: pty.fork() + execvp will produce a clean error
         # inside the terminal session.  But warn so the user sees it early.
         print(
-            f"\033[33m[ClaudeGuard] WARNING: '{args.claude_cmd}' not found on "
+            f"\033[33m[PromptGate] WARNING: '{args.claude_cmd}' not found on "
             f"PATH. The session will fail unless the path is correct.\033[0m",
             file=sys.stderr,
         )
@@ -225,6 +250,8 @@ def main() -> int:
         security_checker=checker,
         claude_command=args.claude_cmd,
         allow_unknown=args.allow_unknown,
+        enable_locator=args.locate_injection,
+        system_prompt=args.system_prompt,
     )
 
     # ── Launch Claude Code and block until it exits ───────────────────────────
@@ -236,12 +263,12 @@ def main() -> int:
     except Exception as exc:
         logger.exception("Unhandled exception in TTYWrapper: %s", exc)
         print(
-            f"\033[31m[ClaudeGuard] Fatal error: {exc}\033[0m",
+            f"\033[31m[PromptGate] Fatal error: {exc}\033[0m",
             file=sys.stderr,
         )
         exit_code = 1
 
-    logger.info("ClaudeGuard exiting with code %d", exit_code)
+    logger.info("PromptGate exiting with code %d", exit_code)
     return exit_code
 
 

@@ -1,5 +1,5 @@
 """
-security_engine — ClaudeGuard's pluggable package verification layer.
+security_engine — PromptGate's pluggable package verification layer.
 
 Public API:
     SecurityChecker      : Orchestrator — use this from application code.

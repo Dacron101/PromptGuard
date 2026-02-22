@@ -1,7 +1,7 @@
 """
 security_engine/base.py
 
-Defines the core abstractions for ClaudeGuard's security verification layer.
+Defines the core abstractions for PromptGate's security verification layer.
 
 Architecture Note:
     This module implements the Strategy Pattern. `PackageVerifier` is the

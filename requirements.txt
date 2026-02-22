@@ -1,3 +1,6 @@
 pexpect>=4.9.0
 colorama>=0.4.6
 requests>=2.31.0
+numpy>=1.26.0
+openai>=1.30.0
+sentence-transformers>=3.0.0
